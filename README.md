@@ -4,7 +4,7 @@
 
 ## Demo
 
-![Kilo Buster demo](assets/demo.gif)
+![Kilo Buster demo](assets/demo-optimized.gif)
 
 A local OpenAI-compatible chat API with a dashboard for loading and monitoring HTTP proxies. Kilo Buster starts with **zero proxies**. Click **Load proxies** to fetch the configured remote list. Entries are added one at a time, and repeated host/port addresses are skipped, including when you click again. Credentials in proxy URLs are supported and are not displayed on the dashboard.
 
@@ -16,10 +16,10 @@ Download the archive for your operating system from GitHub Releases and extract 
 
 Use the latest release page for the current packages.
 
-- [Windows](https://github.com/awiseguy88/Kilo-Buster/releases/latest/download/Kilo-Buster-Windows.zip) — `Kilo-Buster-Windows.zip`
-- [Linux x86_64](https://github.com/awiseguy88/Kilo-Buster/releases/latest/download/Kilo-Buster-Linux.tar.gz) — `Kilo-Buster-Linux.tar.gz`
-- [macOS Apple Silicon](https://github.com/awiseguy88/Kilo-Buster/releases/latest/download/Kilo-Buster-macOS-Apple-Silicon.tar.gz) — `Kilo-Buster-macOS-Apple-Silicon.tar.gz`
-- [macOS Intel](https://github.com/awiseguy88/Kilo-Buster/releases/latest/download/Kilo-Buster-macOS-Intel.tar.gz) — `Kilo-Buster-macOS-Intel.tar.gz`
+- [Windows](https://github.com/AaronWiseAI/Kilo-Buster/releases/latest) — `Kilo-Buster-Windows.zip`
+- [Linux x86_64](https://github.com/AaronWiseAI/Kilo-Buster/releases/latest) — `Kilo-Buster-Linux.tar.gz`
+- [macOS Apple Silicon](https://github.com/AaronWiseAI/Kilo-Buster/releases/latest) — `Kilo-Buster-macOS-Apple-Silicon.tar.gz`
+- [macOS Intel](https://github.com/AaronWiseAI/Kilo-Buster/releases/latest) — `Kilo-Buster-macOS-Intel.tar.gz`
 
 The release page also includes SHA-256 checksums when a tagged build is published.
 
