@@ -31,7 +31,7 @@ jobs:
         run: |
           mkdir -p release/runtime
           curl --fail --silent --show-error --location "https://raw.githubusercontent.com/nodejs/node/$(node --version)/LICENSE" -o release/runtime/LICENSE
-          cp README.md THIRD-PARTY-NOTICES.md 'Kilo Buster_ Breaking Network Chains.png' release/
+          cp README.md THIRD-PARTY-NOTICES.md "assets/Kilo Buster_ Breaking Network Chains.png" release/
       - name: Package Windows
         if: runner.os == 'Windows'
         shell: pwsh
