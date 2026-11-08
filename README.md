@@ -4,7 +4,9 @@
 
 ## Demo
 
-![Kilo Buster demo](assets/demo-optimized.gif)
+![Kilo Buster demo](assets/demo.gif)
+
+[Watch the full demo GIF](assets/demo.gif)
 
 A local OpenAI-compatible chat API with a dashboard for loading and monitoring HTTP proxies. Kilo Buster starts with **zero proxies**. Click **Load proxies** to fetch the configured remote list. Entries are added one at a time, and repeated host/port addresses are skipped, including when you click again. Credentials in proxy URLs are supported and are not displayed on the dashboard.
 
