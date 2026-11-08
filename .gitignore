@@ -1,0 +1,11 @@
+node_modules/
+.env
+*.pem
+*.key
+prox.txt
+proxy*.txt
+proxyscrape*.txt
+proxy-health-state.json*
+*.tokens.sqlite*
+dist/
+Recording_11_8_2026_3_11_13_PM.gif

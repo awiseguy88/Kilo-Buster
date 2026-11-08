@@ -1,0 +1,91 @@
+name: Build releases
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            name: Windows
+          - os: ubuntu-latest
+            name: Linux
+          - os: macos-14
+            name: macOS-Apple-Silicon
+          - os: macos-15-intel
+            name: macOS-Intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --omit=dev
+      - run: npm test
+      - name: Collect runtime notices and release documentation
+        shell: bash
+        run: |
+          mkdir -p release/runtime
+          curl --fail --silent --show-error --location "https://raw.githubusercontent.com/nodejs/node/$(node --version)/LICENSE" -o release/runtime/LICENSE
+          cp README.md THIRD-PARTY-NOTICES.md 'Kilo Buster_ Breaking Network Chains.png' release/
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release/app,release/runtime | Out-Null
+          Copy-Item server.mjs,api-key.mjs,dashboard.html,package.json,package-lock.json -Destination release/app
+          Copy-Item node_modules release/app/node_modules -Recurse
+          Copy-Item (Get-Command node).Source release/runtime/node.exe
+          Copy-Item assets/KiloBuster.ico,assets/KiloBuster_FullArt.ico,assets/KiloBuster_Icon.png -Destination release
+          & "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:exe /win32icon:assets/KiloBuster.ico /out:release/Kilo-Buster.exe launcher.cs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path release/* -DestinationPath Kilo-Buster-Windows.zip
+      - name: Package Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p release/runtime
+          cp server.mjs api-key.mjs dashboard.html package.json package-lock.json start.sh release/
+          cp -R node_modules release/
+          cp "$(command -v node)" release/runtime/node
+          chmod +x release/start.sh release/runtime/node
+          cp assets/KiloBuster.ico assets/KiloBuster_FullArt.ico assets/KiloBuster_Icon.png release/
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            bundle="release/Kilo Buster.app/Contents"
+            mkdir -p "$bundle/MacOS" "$bundle/Resources" KiloBuster.iconset
+            for size in 16 32 128 256 512; do
+              sips -s format png -z "$size" "$size" KiloBuster_Icon.png --out "KiloBuster.iconset/icon_${size}x${size}.png" >/dev/null
+              double=$((size * 2))
+              sips -s format png -z "$double" "$double" KiloBuster_Icon.png --out "KiloBuster.iconset/icon_${size}x${size}@2x.png" >/dev/null
+            done
+            iconutil -c icns KiloBuster.iconset -o "$bundle/Resources/KiloBuster.icns"
+            cp packaging/Info.plist "$bundle/"
+            cp packaging/mac-launch "$bundle/MacOS/KiloBuster"
+            chmod +x "$bundle/MacOS/KiloBuster"
+          else
+            cp packaging/Kilo-Buster.desktop packaging/install-desktop.sh release/
+            chmod +x release/Kilo-Buster.desktop release/install-desktop.sh
+          fi
+          tar -czf "Kilo-Buster-${{ matrix.name }}.tar.gz" -C release .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kilo-Buster-${{ matrix.name }}
+          path: Kilo-Buster-*.${{ runner.os == 'Windows' && 'zip' || 'tar.gz' }}
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Kilo-Buster-*
+          merge-multiple: true
+          path: packages
+      - run: cd packages && sha256sum *.zip *.tar.gz > SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: packages/*
