@@ -2,6 +2,8 @@ const plans = [
   ['Starter', 2500, '7.99'], ['Builder', 5000, '12.99'],
   ['Studio', 7500, '19.99'], ['Team', 10000, '29.99']
 ];
+const github = '<svg aria-hidden="true" viewBox="0 0 24 24" width="19" height="19" fill="currentColor"><path d="M12 .8a11.2 11.2 0 0 0-3.54 21.83c.56.1.76-.24.76-.54v-2.14c-3.12.68-3.78-1.33-3.78-1.33-.51-1.3-1.25-1.64-1.25-1.64-1.02-.7.08-.69.08-.69 1.13.08 1.72 1.16 1.72 1.16 1 1.71 2.63 1.22 3.27.93.1-.73.4-1.22.72-1.5-2.49-.29-5.11-1.25-5.11-5.54 0-1.22.44-2.22 1.15-3-.12-.28-.5-1.42.11-2.96 0 0 .94-.3 3.08 1.15a10.7 10.7 0 0 1 5.6 0c2.14-1.45 3.08-1.15 3.08-1.15.61 1.54.23 2.68.11 2.96.71.78 1.14 1.78 1.14 3.01 0 4.3-2.62 5.24-5.12 5.52.4.35.76 1.03.76 2.08v3.09c0 .3.2.65.77.54A11.2 11.2 0 0 0 12 .8Z"/></svg>';
+const repo = 'https://github.com/awiseguy88/Kilo-Buster';
 
 function planCard([name, quota, amount]) {
   return `<article class="plan">
@@ -22,7 +24,7 @@ export function publicPage(path) {
     <meta name="description" content="Choose a monthly API plan, receive your personal API key by email and connect your AI tools."><link rel="icon" href="/favicon.ico">
     <link rel="stylesheet" href="/theme.css"><link rel="stylesheet" href="/cloud.css"><script defer src="/theme.js"></script></head>
     <body class="public"><header><a class="brand" href="/">Kilo Buster <span>Cloud</span></a>
-    <nav aria-label="Main"><a href="/pricing">Pricing</a><a href="/setup">Setup guide</a><a href="/login">Sign in</a><a href="/register">Create account</a></nav></header>
+    <nav aria-label="Main"><a href="/pricing">Pricing</a><a href="/setup">Setup guide</a><a href="${repo}" class="github-link">${github} Self-host on GitHub</a><a href="/login">Sign in</a><a href="/register">Create account</a></nav></header>
     <main>${pricing?'':hero}<section class="plan-section"><${pricing?'h1':'h2'}>Monthly plans</${pricing?'h1':'h2'}>
     <p>Choose your hourly limit. Pay securely with Stripe and get your API key by email. All prices are in USD and renew monthly.</p>
     <div class="plan-grid">${plans.map(planCard).join('')}</div><p id="checkout-status" role="status"></p>
@@ -34,7 +36,7 @@ export function publicPage(path) {
     <section><h2>Before you buy</h2><details><summary>Can I try the endpoint first?</summary><p>The setup guide offers a three-day trial with up to 750 requests per rolling hour.</p></details>
     <details><summary>Already have a Kilo Buster account?</summary><p>Sign in before buying to add the subscription to your existing account.</p><a href="/login">Sign in</a></details>
     <details><summary>How does the hourly limit work?</summary><p>The limit applies over the previous 60 minutes. Upstream availability can reduce throughput. Service is best effort.</p></details></section>
-    </main><footer>Operated by Aaron Wise AI · Independent of Kilo, OpenAI and Anthropic. <a href="mailto:aaronwise@aaronwiseai.com">Contact support</a></footer>
+    </main><footer>Operated by Aaron Wise AI · Independent of Kilo, OpenAI and Anthropic. <a href="mailto:aaronwise@aaronwiseai.com">Contact support</a> <a href="${repo}" class="github-link">${github} Self-host on GitHub</a></footer>
     <script>
     const choices = [...document.querySelectorAll('[data-plan]')];
     for (const choice of choices) choice.onclick = async () => {

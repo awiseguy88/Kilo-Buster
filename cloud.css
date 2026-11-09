@@ -10,6 +10,7 @@
 .front-hero img{width:100%;height:auto;border-radius:16px}.front-hero p{max-width:36rem;font-size:1.1rem}.public .actions{display:flex;gap:10px;flex-wrap:wrap}
 .public a:not(.brand),header nav a,.login p a,#content a:not(.brand),.admin-tabs button{display:inline-flex;align-items:center;justify-content:center;min-height:38px;border:1px solid var(--border);background:var(--surface-2);color:var(--text);border-radius:8px;padding:7px 13px;font:600 .91rem/1.35 Inter,"Segoe UI",system-ui,sans-serif;text-decoration:none}
 .public a.primary,.plan button,.admin-tabs button[aria-current="page"]{background:var(--accent);color:#131d10;border-color:transparent}
+.github-link{gap:8px}.github-link svg{flex:none}
 .public a:focus-visible,.public button:focus-visible,summary:focus-visible{outline:3px solid #63b6ef;outline-offset:3px}
 .public a:not(.brand):hover,header nav a:hover,.login p a:hover,#content a:hover{border-color:var(--accent)}
 .plan-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-top:22px}
