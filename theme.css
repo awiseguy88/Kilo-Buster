@@ -6,3 +6,21 @@ header{flex-wrap:wrap;gap:10px}.jump-links{margin-left:auto}.appearance{display:
 .appearance-menu{background:var(--surface);border:1px solid var(--border)}.appearance-menu label{color:var(--muted);font:12px system-ui}.appearance-menu select{color:var(--text);background:var(--field);border:1px solid var(--border);border-radius:5px}
 .appearance-menu label{margin:0}.appearance-button{cursor:pointer}.appearance{max-width:100%}
 .appearance{position:relative;display:inline-flex;flex:none}.appearance-menu{position:absolute;top:calc(100% + 8px);right:0;z-index:100;display:grid;gap:10px;min-width:180px;padding:12px;box-shadow:0 12px 28px #0004}.appearance-menu label{display:grid;gap:4px}.appearance-menu[hidden]{display:none}
+.mobile-nav-toggle{display:none}
+@media(max-width:700px){
+  html,body{max-width:100%;overflow-x:clip}
+  header{position:relative;display:flex;align-items:center;gap:8px;z-index:20}
+  header .appearance{order:1;margin-left:auto;position:relative}
+  header .mobile-nav-toggle{display:inline-flex;order:2;align-items:center;justify-content:center;min-height:40px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--secondary);color:var(--text);font:600 13px system-ui;cursor:pointer}
+  header nav,header .jump-links,.public header nav{display:none;order:3;width:100%;margin:0;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface);gap:6px}
+  header nav.mobile-open,header .jump-links.mobile-open,.public header nav.mobile-open{display:flex;flex-direction:column;align-items:stretch}
+  header nav a,header nav button,header .jump-links a{width:100%;min-height:42px;display:flex;align-items:center;justify-content:center;white-space:normal;text-align:center}
+  header .appearance-menu{position:absolute;right:0;top:calc(100% + 8px);z-index:100;display:grid;min-width:170px;max-width:calc(100vw - 32px);padding:12px;box-shadow:0 12px 28px #0005}
+  header .appearance-menu[hidden]{display:none}
+  main{min-width:0}pre,code{max-width:100%;overflow-wrap:anywhere}pre{overflow-x:auto;white-space:pre-wrap}
+  .metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.metrics .metric{min-width:0;margin:0}
+  .actions{gap:8px}.actions label{max-width:100%}.actions button{white-space:normal}
+  .tablewrap{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}.tablewrap table{min-width:720px}
+  .intro{align-items:stretch}.intro>button{width:100%}.intro>button+button{margin:0!important}
+}
+@media(max-width:380px){header strong,header .brand{font-size:17px}.metrics{grid-template-columns:1fr}.appearance button.appearance-button{padding:8px;font-size:12px}}
