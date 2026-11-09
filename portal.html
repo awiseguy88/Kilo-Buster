@@ -139,19 +139,19 @@ async function account(){
   const p=el('section',undefined,'panel account-panel');content.append(p);p.append(el('h2','API access'),el('code',location.origin+'/v1'),
     el('p',u.keys.length?'Assigned keys':'Your administrator can assign you an API key.'));
   for(const k of u.keys){const line=el('div',undefined,'key-line');line.append(el('strong','API key · '+k.suffix),el('p',k.remaining+' of '+k.quota+' requests left this hour'));const copy=el('button','Copy API key','secondary');copy.type='button';copy.onclick=async()=>{try{await navigator.clipboard.writeText(k.key);message('API key copied to clipboard.')}catch{message('Clipboard access was blocked.')}};line.append(copy);p.append(line)}
-  const plans=el('section',undefined,'panel account-panel');plans.append(el('h2','Your subscription'));content.append(plans);
+  const plans=el('section',undefined,'panel account-panel subscription-panel');plans.append(el('h2','Your subscription'));content.append(plans);
   if(u.paidUntil){
     plans.append(el('p','Paid through '+new Date(u.paidUntil).toLocaleDateString()+'.'));
     button(plans,'Manage billing',async()=>{location.href=(await api('/portal/billing-portal',{})).url});
   }else{
-    link(plans,'Compare monthly plans','/pricing');
-    const choices=el('div',undefined,'actions');plans.append(choices);
+    plans.append(el('p','Increase your hourly capacity instantly with a secure Stripe subscription.'));
+    const choices=el('div',undefined,'plan-choices');plans.append(choices);
     for(const [rate,price] of [[2500,'$7.99'],[5000,'$12.99'],[7500,'$19.99'],[10000,'$29.99']])
-      button(choices,rate.toLocaleString()+'/hr · '+price+'/month',async()=>{location.href=(await api('/portal/checkout',{price:rate})).url},true);
+      {const card=el('div',undefined,'plan-choice');card.append(el('strong',rate.toLocaleString()+'/hr'),el('small',price+'/month'));button(card,'Upgrade',async()=>{location.href=(await api('/portal/checkout',{price:rate})).url});choices.append(card)}
   }
   if(u.invoices.length){plans.append(el('h3','Paid invoices'));for(const i of u.invoices){const row=el('p',new Date(i.paid).toLocaleDateString()+' · $'+(i.amount/100).toFixed(2)+' · ');if(i.url?.startsWith('https://invoice.stripe.com/'))link(row,'View invoice',i.url);plans.append(row);}}
   if(u.quota>0&&u.used>=u.quota*.8)p.append(el('p',u.used.toLocaleString()+' of '+u.quota.toLocaleString()+' requests used this hour. Review your plan below.'));
-  button(plans,'Ask about custom capacity',()=>{$('mailStatus').textContent='';$('upgrade').showModal()},true);
+  const support=el('div',undefined,'upgrade-support');support.append(el('span','Need more than 10,000 requests per hour?'));button(support,'Request custom capacity',()=>{$('mailStatus').textContent='';$('upgrade').showModal()},true);plans.append(support);
   metrics(content,[['Lifetime input tokens',u.input],['Lifetime output tokens',u.output],['Total tokens',u.input+u.output]]);
 }
 async function admins(){
