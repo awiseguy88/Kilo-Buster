@@ -151,7 +151,10 @@ async function account(){
   }
   if(u.invoices.length){plans.append(el('h3','Paid invoices'));for(const i of u.invoices){const row=el('p',new Date(i.paid).toLocaleDateString()+' · $'+(i.amount/100).toFixed(2)+' · ');if(i.url?.startsWith('https://invoice.stripe.com/'))link(row,'View invoice',i.url);plans.append(row);}}
   if(u.quota>0&&u.used>=u.quota*.8)p.append(el('p',u.used.toLocaleString()+' of '+u.quota.toLocaleString()+' requests used this hour. Review your plan below.'));
-  const support=el('div',undefined,'upgrade-support');support.append(el('span','Need more than 10,000 requests per hour?'));button(support,'Request custom capacity',()=>{$('mailStatus').textContent='';$('upgrade').showModal()},true);plans.append(support);
+  const support=el('div',undefined,'upgrade-support');support.append(el('span','Need more than 10,000 requests per hour?'));
+  const supportActions=el('div',undefined,'actions');button(supportActions,'Request custom capacity',()=>{$('mailStatus').textContent='';$('upgrade').showModal()},true);
+  button(supportActions,'Report a problem',()=>{location.href='mailto:aaronwise@aaronwiseai.com?subject='+encodeURIComponent('Kilo Buster Cloud problem report')+'&body='+encodeURIComponent('Username: '+u.username+'\n\nWhat happened?\n\nSteps to reproduce:\n')},true);
+  support.append(supportActions);plans.append(support);
   metrics(content,[['Lifetime input tokens',u.input],['Lifetime output tokens',u.output],['Total tokens',u.input+u.output]]);
 }
 async function admins(){
