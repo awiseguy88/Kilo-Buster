@@ -150,7 +150,9 @@ async function account(){
     for(const [rate,price] of [[2500,'$7.99'],[5000,'$12.99'],[7500,'$19.99'],[10000,'$29.99']])
       {const card=el('div',undefined,'plan-choice');card.append(el('strong',rate.toLocaleString()+'/hr'),el('small',price+'/month'));button(card,'Upgrade',async()=>{location.href=(await api('/portal/checkout',{price:rate})).url});choices.append(card)}
   }
-  if(u.invoices.length){plans.append(el('h3','Paid invoices'));for(const i of u.invoices){const row=el('p',new Date(i.paid).toLocaleDateString()+' · $'+(i.amount/100).toFixed(2)+' · ');if(i.url?.startsWith('https://invoice.stripe.com/'))link(row,'View invoice',i.url);plans.append(row);}}
+  const orders=el('section',undefined,'panel account-panel orders-panel');orders.append(el('h2','Orders & receipts'),el('p','Your paid subscriptions and renewals.'));content.append(orders);
+  if(!u.invoices.length)orders.append(el('p','No paid orders yet. Your receipts will appear here after a payment is confirmed.'));
+  for(const i of u.invoices){const row=el('div',undefined,'order-row'),details=el('div',undefined,'order-details');details.append(el('strong',i.renewal?'Subscription renewal':'Subscription purchase'),el('small',new Date(i.paid).toLocaleDateString()+' · '+Number(i.quota).toLocaleString()+' requests/hour'));row.append(details,el('strong','$'+(i.amount/100).toFixed(2)));if(i.url?.startsWith('https://invoice.stripe.com/')){const receipt=el('a','View receipt');receipt.href=i.url;receipt.target='_blank';receipt.rel='noopener noreferrer';row.append(receipt)}else row.append(el('small','Receipt unavailable'));orders.append(row)}
   if(u.quota>0&&u.used>=u.quota*.8)p.append(el('p',u.used.toLocaleString()+' of '+u.quota.toLocaleString()+' requests used this hour. Review your plan below.'));
   const support=el('div',undefined,'upgrade-support');support.append(el('span','Need more than 10,000 requests per hour?'));
   const supportActions=el('div',undefined,'actions');button(supportActions,'Request custom capacity',()=>{$('mailStatus').textContent='';$('upgrade').showModal()},true);
