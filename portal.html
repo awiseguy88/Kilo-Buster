@@ -2,24 +2,26 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Kilo Buster Cloud</title>
 <style>
+:root{--portal-art:url('/portal/art.png')}
 :root{color-scheme:dark;font:16px/1.5 Inter,"Segoe UI",system-ui,sans-serif;color:#ebeff7;background:#0b0e15}
 *{box-sizing:border-box}body{margin:0}main,header{max-width:1000px;margin:auto;padding:24px}header{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #303a48;gap:12px;flex-wrap:wrap}header strong{font-size:20px}nav,.actions,.metrics{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
 a{color:#b9f477}h1{letter-spacing:-.04em;margin:.4em 0;font-size:clamp(28px,5vw,44px)}h2{font-size:19px;margin:0 0 12px}p,small,label{color:#b9c5d5}.panel{margin:16px 0;background:#151c27;border:1px solid #303a48;border-radius:14px;padding:20px}.login{max-width:420px}.metrics{align-items:stretch}.metric{flex:1 1 140px}.metric strong{display:block;font-size:24px}input,button{font:inherit;border-radius:7px;padding:8px 12px}input{width:100%;background:#0b111a;color:inherit;border:1px solid #536070}label{display:block;margin-bottom:12px}button{border:0;background:#b9f477;color:#142005;font-weight:650;cursor:pointer}button:disabled{opacity:.5}button.secondary{background:#293647;color:#eaf1fa}code{overflow-wrap:anywhere}#message{color:#ffe3a4}.row{border-top:1px solid #364252;padding:14px 0}.row input{width:7em}.row label{margin:0}.secret{font-family:monospace}a:focus-visible,button:focus-visible,input:focus-visible{outline:3px solid #83bbff}
 body{min-height:100svh;background:#111821;isolation:isolate}
-body::before{content:"";position:fixed;inset:0;z-index:-1;background:linear-gradient(90deg,#0b1119f5,#101925d6 54%,#111a2570),url('/portal/art.png') center/cover no-repeat}
+body::before{content:"";position:fixed;inset:0;z-index:-1;background:linear-gradient(90deg,#0b1119f5,#101925d6 54%,#111a2570),var(--portal-art) center/cover no-repeat}
 header{max-width:none;padding:14px max(24px,calc((100vw - 1120px)/2));background:#101620ed;border-color:#8995aa3b}
 header strong{letter-spacing:-.035em}header strong span{font-weight:450;color:#afc7d4}
 main{max-width:1168px}.panel{background:#111a25f7;border-color:#566376;border-radius:12px}
 a{color:#ffbf8c}button{background:#ffc08b;color:#28180b}button:hover{filter:brightness(1.08)}
-body.auth::before{background:linear-gradient(90deg,#101620 4%,#101620fa 28%,#101620bc 42%,transparent 67%),url('/portal/art.png') right center/min(81vw,1750px) auto no-repeat,#101620}
+body.auth::before{background:linear-gradient(90deg,#101620 4%,#101620fa 28%,#101620bc 42%,transparent 67%),var(--portal-art) right center/min(81vw,1750px) auto no-repeat,#101620}
 .auth main{padding-top:clamp(44px,10vh,112px)}.auth h1{font-size:clamp(32px,4vw,48px)}
 .login{max-width:370px;padding:24px;box-shadow:0 16px 44px #0005}.login input{margin-top:5px}.login button{width:100%;margin-top:6px}.login p{margin:15px 0 0}
-@media(max-width:700px){body.auth::before{position:absolute;height:clamp(165px,55vw,350px);top:58px;background:linear-gradient(0deg,#111821,transparent 37%),url('/portal/art.png') center/cover no-repeat}.auth main{padding:clamp(145px,49vw,305px) 18px 24px}.auth .login{max-width:none}.auth h1{margin:.3em 0}.panel{padding:16px}.actions{align-items:end}header{padding:14px 18px}}
+@media(max-width:700px){body.auth::before{position:absolute;height:clamp(165px,55vw,350px);top:58px;background:linear-gradient(0deg,#111821,transparent 37%),var(--portal-art) center/cover no-repeat}.auth main{padding:clamp(145px,49vw,305px) 18px 24px}.auth .login{max-width:none}.auth h1{margin:.3em 0}.panel{padding:16px}.actions{align-items:end}header{padding:14px 18px}}
 </style></head><body><header><strong>Kilo Buster <span>Cloud</span></strong><nav id="nav"></nav></header><main>
 <h1 id="title"></h1><p id="message" role="status"></p><div id="content"></div>
 <section id="issued" class="panel" hidden><h2>New API key</h2><label>Copy this key now. It is shown once.<input class="secret" id="secret" readonly></label><button id="copy">Copy key</button></section>
 </main><script>
 const $=id=>document.getElementById(id), path=location.pathname;
+if(location.protocol==='file:') document.documentElement.style.setProperty('--portal-art','url("./assets/Kilo Buster_ Breaking Network Chains.png")');
 const content=$('content'), nav=$('nav');
 function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n}
 function link(parent,label,href){const n=el('a',label);n.href=href;parent.append(n)}
