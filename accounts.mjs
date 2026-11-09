@@ -51,9 +51,9 @@ export function accounts(db, defaultLimit) {
     db.exec('CREATE INDEX IF NOT EXISTS key_window ON requests(key_id,at); COMMIT');
   } catch(e) { db.exec('ROLLBACK'); throw e; }
   const lookup = query('SELECT u.id,k.id AS key_id,k.quota FROM api_keys k JOIN users u ON u.id=k.uid WHERE k.hash=? AND u.disabled=0 AND (k.expires IS NULL OR k.expires>?)');
-  const view = `SELECT id,username,disabled,total,input,output,
+  const view = `SELECT id,username,disabled,trial_until,total,input,output,
     (SELECT count(*) FROM requests r WHERE r.uid=u.id AND r.at>?) AS used FROM users u`;
-  const keyRows=query(`SELECT k.id,k.suffix,k.quota,count(r.at) AS used FROM api_keys k
+  const keyRows=query(`SELECT k.id,k.suffix,k.quota,k.expires,count(r.at) AS used FROM api_keys k
     LEFT JOIN requests r ON r.key_id=k.id AND r.at>? WHERE k.uid=? GROUP BY k.id ORDER BY k.id`);
   const summary = (row,revealKeys=false) => {
     const keys=keyRows.all(Date.now()-hour,row.id).map(k=>({...k,remaining:Math.max(0,k.quota-k.used)}));
@@ -119,6 +119,10 @@ export function accounts(db, defaultLimit) {
         query('INSERT INTO trial_claims VALUES(?,?,?)').run(claimHash,result.lastInsertRowid,expires);
         db.exec('COMMIT'); return {key,expires};
       } catch(e) { db.exec('ROLLBACK'); throw e; }
+    },
+    getTrial(claim) {
+      const row=query('SELECT a.secret,c.expires FROM trial_claims c JOIN api_keys a ON a.id=c.key_id WHERE c.claim_hash=? AND c.expires>?').get(digest(claim),Date.now());
+      const key=reveal(row?.secret); return row&&key?{key,expires:row.expires}:null;
     },
     assigned() { return query('SELECT COALESCE(SUM(k.quota),0) AS n FROM api_keys k JOIN users u ON u.id=k.uid WHERE u.disabled=0').get().n; },
     setKeyQuota(id,n) { return query('UPDATE api_keys SET quota=? WHERE id=?').run(n,id).changes; },
