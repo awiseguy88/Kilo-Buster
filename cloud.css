@@ -23,8 +23,9 @@
 .admin-auth .login{border-top:3px solid var(--accent)}.login p a{width:100%}
 .admin-key-panel{padding:clamp(18px,3vw,30px)}
 .admin-key-panel>h2{margin-bottom:4px}.admin-key-panel>p{margin-top:0;color:var(--muted)}
-.admin-user-row{padding:22px 0;border-top:1px solid var(--border)}
-.admin-user-row>strong{font-size:1.08rem}.admin-user-row>.actions{margin-top:12px;align-items:end}
+.admin-user-row{display:grid;gap:14px;margin:14px 0;padding:20px;border:1px solid var(--border);border-radius:14px;background:var(--surface-2);box-shadow:0 5px 16px color-mix(in srgb,#000 10%,transparent)}
+.admin-user-row>strong{font-size:1.08rem}.admin-user-row>p{margin:0;color:var(--muted)}.admin-user-row>.actions{margin:0;align-items:end;padding-top:4px;border-top:1px solid var(--border)}
+.admin-user-row>.actions label{margin:0}.admin-user-row>.actions button{min-height:38px}
 .admin-key-line{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;padding:12px 14px;border:1px solid var(--border);background:var(--surface-2);border-radius:10px}
 .admin-key-line strong{min-width:8rem}.admin-key-line small{margin-right:auto;color:var(--muted)}
 .admin-key-line input{width:7rem}.account-panel{box-shadow:0 8px 24px color-mix(in srgb,#000 8%,transparent)}
