@@ -111,6 +111,17 @@ export async function portal(req,res,path,store,readJson,json) {
       return send({accepted:true});
     } catch {return fail(502,'Email delivery could not be confirmed. Please try again.');}
   }
+  if(path==='/portal/checkout') {
+    if(!session?.uid) return fail(403,'User sign-in required.');
+    if(!process.env.STRIPE_SECRET_KEY) return fail(503,'Stripe is not configured yet.');
+    const prices={2500:process.env.STRIPE_PRICE_2500,5000:process.env.STRIPE_PRICE_5000,7500:process.env.STRIPE_PRICE_7500,10000:process.env.STRIPE_PRICE_10000};
+    const price=prices[data.price]; if(!price) return fail(400,'Invalid plan.');
+    const origin=`${req.headers['x-forwarded-proto']?.split(',')[0]||'https'}://${req.headers.host}`;
+    const form=new URLSearchParams({mode:'subscription','success_url':origin+'/account?billing=success','cancel_url':origin+'/account?billing=cancelled','client_reference_id':String(session.uid),'line_items[0][price]':price,'line_items[0][quantity]':'1','subscription_data[metadata][uid]':String(session.uid),'subscription_data[metadata][quota]':String(data.price)});
+    const response=await fetch('https://api.stripe.com/v1/checkout/sessions',{method:'POST',headers:{Authorization:'Bearer '+process.env.STRIPE_SECRET_KEY,'Content-Type':'application/x-www-form-urlencoded'},body:form});
+    const result=await response.json(); if(!response.ok||!result.url) return fail(502,'Stripe Checkout could not be created.');
+    return send({url:result.url});
+  }
   if(!session?.admin) return fail(403,'Admin sign-in required.');
   if(path==='/portal/users/create-with-key') {
     const {username,password,quota}=data;
