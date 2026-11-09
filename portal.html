@@ -156,6 +156,10 @@ async function account(){
   const supportActions=el('div',undefined,'actions');button(supportActions,'Request custom capacity',()=>{$('mailStatus').textContent='';$('upgrade').showModal()},true);
   button(supportActions,'Report a problem',()=>{location.href='mailto:aaronwise@aaronwiseai.com?subject='+encodeURIComponent('Kilo Buster Cloud problem report')+'&body='+encodeURIComponent('Username: '+u.username+'\n\nWhat happened?\n\nSteps to reproduce:\n')},true);
   support.append(supportActions);plans.append(support);
+  const security=el('section',undefined,'panel account-panel');security.append(el('h2','Account security'),el('p','Update your password. Other signed-in sessions will be signed out.'));content.append(security);
+  const form=el('form',undefined,'password-change'), current=field(form,'Current password','password','current-password'), password=field(form,'New password','password','new-password'), confirmPassword=field(form,'Confirm new password','password','new-password');password.minLength=10;password.maxLength=256;confirmPassword.minLength=10;confirmPassword.maxLength=256;
+  const save=el('button','Change password');form.append(save);security.append(form);
+  form.onsubmit=async e=>{e.preventDefault();if(password.value!==confirmPassword.value){message('New passwords do not match.');return}save.disabled=true;try{await api('/portal/change-password',{current:current.value,password:password.value});form.reset();message('Password updated. Other sessions have been signed out.')}catch(error){message(error.message)}finally{save.disabled=false}};
   metrics(content,[['Lifetime input tokens',u.input],['Lifetime output tokens',u.output],['Total tokens',u.input+u.output]]);
 }
 async function admins(){
@@ -205,7 +209,7 @@ async function admins(){
 function limitInput(parent,label,value){const input=field(parent,label,'number');input.min=0;input.max=1000000;input.value=value;return input}
 if(path==='/setup')guide();
 else if(path==='/welcome')welcome();
-else if(path==='/account'){account().catch(e=>message(e.message));setInterval(()=>{if(!document.hidden&&!$('upgrade').open)account().catch(e=>message(e.message))},15000)}
+else if(path==='/account'){account().catch(e=>message(e.message));setInterval(()=>{if(!document.hidden&&!$('upgrade').open&&!document.activeElement?.closest('.password-change'))account().catch(e=>message(e.message))},15000)}
 else if(path==='/admin/users'){$('title').textContent='Accounts and allocation';link(nav,'Home','/');link(nav,'Proxy dashboard','/dashboard');link(nav,'Setup guide','/setup');signOut();admins().catch(e=>message(e.message));button(nav,'Refresh',admins,true)}
 else auth();
 </script></body></html>
