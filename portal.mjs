@@ -41,7 +41,7 @@ export async function portal(req,res,path,store,readJson,json) {
   const fail=(status,message)=>json(res,status,{error:{message}});
   const send=data=>json(res,200,data);
   const redirect=location=>{res.writeHead(303,{location});res.end();};
-  if (req.method==='GET' && ['/','/login','/register','/admin','/account','/admin/users'].includes(path)) {
+  if (req.method==='GET' && ['/','/login','/register','/admin','/account','/admin/users','/setup'].includes(path)) {
     if (path==='/admin/users' && !session?.admin) return redirect('/admin');
     if (path==='/account' && !session?.uid) return redirect('/login');
     res.writeHead(200,{'content-type':'text/html; charset=utf-8'});return res.end(html);

@@ -1,9 +1,19 @@
-import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, scrypt, timingSafeEqual, createCipheriv, createDecipheriv } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const derive = promisify(scrypt);
 const digest = value => createHash('sha256').update(value).digest('hex');
 const secret = () => randomBytes(32).toString('base64url');
+const keyMaterial = () => createHash('sha256').update(process.env.KEY_ENCRYPTION_SECRET || process.env.ADMIN_PASSWORD || 'missing-key-secret').digest();
+function protect(value) {
+  const iv=randomBytes(12), cipher=createCipheriv('aes-256-gcm',keyMaterial(),iv);
+  const body=Buffer.concat([cipher.update(value,'utf8'),cipher.final()]);
+  return [iv.toString('base64url'),cipher.getAuthTag().toString('base64url'),body.toString('base64url')].join('.');
+}
+function reveal(value) {
+  if(!value) return null;
+  try { const [iv,tag,body]=value.split('.'); const decipher=createDecipheriv('aes-256-gcm',keyMaterial(),Buffer.from(iv,'base64url')); decipher.setAuthTag(Buffer.from(tag,'base64url')); return Buffer.concat([decipher.update(Buffer.from(body,'base64url')),decipher.final()]).toString('utf8'); } catch { return null; }
+}
 export const hour = 3600000;
 export const validLimit = n => Number.isSafeInteger(n) && n >= 0 && n <= 1000000;
 export const sameSecret = (a,b) => timingSafeEqual(Buffer.from(digest(a)), Buffer.from(digest(b)));
@@ -26,8 +36,9 @@ export function accounts(db, defaultLimit) {
   try {
     db.exec(`CREATE TABLE IF NOT EXISTS api_keys (
       id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER NOT NULL REFERENCES users(id),
-      hash TEXT NOT NULL UNIQUE, suffix TEXT NOT NULL, quota INTEGER NOT NULL CHECK(quota>=0));
+      hash TEXT NOT NULL UNIQUE, suffix TEXT NOT NULL, quota INTEGER NOT NULL CHECK(quota>=0), secret TEXT);
       CREATE INDEX IF NOT EXISTS keys_owner ON api_keys(uid);`);
+    if (!query("SELECT 1 FROM pragma_table_info('api_keys') WHERE name='secret'").get()) db.exec('ALTER TABLE api_keys ADD COLUMN secret TEXT');
     if (!query("SELECT 1 FROM pragma_table_info('requests') WHERE name='key_id'").get()) {
       db.exec(`ALTER TABLE requests ADD COLUMN key_id INTEGER;
         INSERT INTO api_keys(uid,hash,suffix,quota) SELECT id,key_hash,suffix,quota FROM users WHERE key_hash IS NOT NULL AND disabled=0;
@@ -41,7 +52,7 @@ export function accounts(db, defaultLimit) {
     (SELECT count(*) FROM requests r WHERE r.uid=u.id AND r.at>?) AS used FROM users u`;
   const keyRows=query(`SELECT k.id,k.suffix,k.quota,count(r.at) AS used FROM api_keys k
     LEFT JOIN requests r ON r.key_id=k.id AND r.at>? WHERE k.uid=? GROUP BY k.id ORDER BY k.id`);
-  const summary = row => {
+  const summary = (row,revealKeys=false) => {
     const keys=keyRows.all(Date.now()-hour,row.id).map(k=>({...k,remaining:Math.max(0,k.quota-k.used)}));
     return {...row,keys,quota:keys.reduce((n,k)=>n+k.quota,0),remaining:keys.reduce((n,k)=>n+k.remaining,0)};
   };
@@ -53,8 +64,8 @@ export function accounts(db, defaultLimit) {
   const insertUser=query('INSERT INTO users(username,password,quota) VALUES(?,?,?) ON CONFLICT(username) DO NOTHING');
   function issue(id,quota) {
     const key='kb_'+secret();
-    return query('INSERT INTO api_keys(uid,hash,suffix,quota) SELECT id,?,?,? FROM users WHERE id=? AND disabled=0')
-      .run(digest(key),key.slice(-6),quota,id).changes ? key : null;
+    return query('INSERT INTO api_keys(uid,hash,suffix,quota,secret) SELECT id,?,?,?,? FROM users WHERE id=? AND disabled=0')
+      .run(digest(key),key.slice(-6),quota,protect(key),id).changes ? key : null;
   }
   return {
     async register(username,password) {
@@ -88,7 +99,7 @@ export function accounts(db, defaultLimit) {
       return {uid:row.uid,admin:row.uid===null};
     },
     logout(token) { query('DELETE FROM sessions WHERE hash=?').run(digest(token)); },
-    user(id) { const row=query(view+' WHERE id=?').get(Date.now()-hour,id); return row && summary(row); },
+    user(id) { const row=query(view+' WHERE id=?').get(Date.now()-hour,id); if(!row) return null; const result=summary(row); result.keys=result.keys.map(k=>({...k,key:reveal(query('SELECT secret FROM api_keys WHERE id=?').get(k.id)?.secret)})); return result; },
     list() { return query(view+' ORDER BY username').all(Date.now()-hour).map(summary); },
     defaultLimit,
     assigned() { return query('SELECT COALESCE(SUM(k.quota),0) AS n FROM api_keys k JOIN users u ON u.id=k.uid WHERE u.disabled=0').get().n; },
