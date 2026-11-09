@@ -133,12 +133,13 @@ async function welcome(){
   }catch(error){status.textContent=error.message}
 }
 async function account(){
+  link(nav,'Home','/');link(nav,'Setup guide','/setup');link(nav,'Pricing','/pricing');
   const u=await api('/portal/me');content.replaceChildren();$('title').textContent=u.username;if(new URLSearchParams(location.search).get('billing')==='success')message('Welcome back from Checkout. Your current keys and limits are shown below.');
   metrics(content,[['Requests left this hour',u.remaining],['Used in last 60 min',u.used],['Hourly limit',u.quota],['Lifetime requests',u.total]]);
-  const p=el('section',undefined,'panel');content.append(p);p.append(el('h2','API access'),el('code',location.origin+'/v1'),
+  const p=el('section',undefined,'panel account-panel');content.append(p);p.append(el('h2','API access'),el('code',location.origin+'/v1'),
     el('p',u.keys.length?'Assigned keys':'Your administrator can assign you an API key.'));
   for(const k of u.keys){const line=el('div',undefined,'key-line');line.append(el('strong','API key · '+k.suffix),el('p',k.remaining+' of '+k.quota+' requests left this hour'));const copy=el('button','Copy API key','secondary');copy.type='button';copy.onclick=async()=>{try{await navigator.clipboard.writeText(k.key);message('API key copied to clipboard.')}catch{message('Clipboard access was blocked.')}};line.append(copy);p.append(line)}
-  const plans=el('section',undefined,'panel');plans.append(el('h2','Your subscription'));content.append(plans);
+  const plans=el('section',undefined,'panel account-panel');plans.append(el('h2','Your subscription'));content.append(plans);
   if(u.paidUntil){
     plans.append(el('p','Paid through '+new Date(u.paidUntil).toLocaleDateString()+'.'));
     button(plans,'Manage billing',async()=>{location.href=(await api('/portal/billing-portal',{})).url});
@@ -170,10 +171,10 @@ async function admins(){
       const name=username.value;create.reset();await admins();showKey(result.key,'Account '+name+' created. Copy this full key now and store it securely; it cannot be recovered later.');message('Account and key created for '+name+'.');
     }catch(e){message(e.message)}finally{submit.disabled=false}
   };
-  const panel=el('section',undefined,'panel');panel.append(el('h2','API key management'));content.append(panel);
+  const panel=el('section',undefined,'panel admin-key-panel');panel.append(el('h2','API key management'),el('p','Create, rotate, limit, or revoke customer keys. Full key values are shown only when created.'));content.append(panel);
   if(!users.length)panel.append(el('p','Registered users will appear here.'));
   for(const u of users){
-    const row=el('div',undefined,'row'),actions=el('div',undefined,'actions');panel.append(row);
+    const row=el('div',undefined,'row admin-user-row'),actions=el('div',undefined,'actions');panel.append(row);
     row.append(el('strong',u.username+(u.trial_until?' · Trial':'')+(u.disabled?' · Revoked':'')),el('p',u.used+' used this hour · '+u.remaining+' left · '+u.total+' lifetime requests'),actions);
     const base='/portal/users/'+u.id+'/';
     if(!u.disabled){
@@ -183,7 +184,7 @@ async function admins(){
       });
     }
     for(const k of u.keys){
-      const line=el('div',undefined,'actions key-line');row.append(line);
+      const line=el('div',undefined,'actions key-line admin-key-line');row.append(line);
       line.append(el('strong','•••• '+k.suffix),el('small',k.used+' used · '+k.remaining+' left'));
       const limit=limitInput(line,'Hourly limit',k.quota), endpoint='/portal/keys/'+k.id+'/';
       button(line,'Save limit',async()=>{if(!limit.reportValidity())return;await api(endpoint+'quota',{quota:limit.valueAsNumber});await admins();message('Limit saved.')},true);
@@ -198,9 +199,9 @@ async function admins(){
   }
 }
 function limitInput(parent,label,value){const input=field(parent,label,'number');input.min=0;input.max=1000000;input.value=value;return input}
-if(path==='/setup')guide();
+if(path==='/setup'){link(nav,'Home','/');link(nav,'Pricing','/pricing');link(nav,'Sign in','/login');link(nav,'Create account','/register');guide();}
 else if(path==='/welcome')welcome();
 else if(path==='/account'){signOut();account().catch(e=>message(e.message));setInterval(()=>{if(!document.hidden&&!$('upgrade').open)account().catch(e=>message(e.message))},15000)}
-else if(path==='/admin/users'){$('title').textContent='Accounts and allocation';link(nav,'Proxy dashboard','/dashboard');signOut();admins().catch(e=>message(e.message));button(nav,'Refresh',admins,true)}
+else if(path==='/admin/users'){$('title').textContent='Accounts and allocation';link(nav,'Home','/');link(nav,'Proxy dashboard','/dashboard');link(nav,'Setup guide','/setup');signOut();admins().catch(e=>message(e.message));button(nav,'Refresh',admins,true)}
 else auth();
 </script></body></html>
