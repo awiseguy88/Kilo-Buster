@@ -74,7 +74,7 @@ export async function portal(req,res,path,store,readJson,json) {
   }
   const live=Number(/^(sk|rk)_live_/.test(process.env.STRIPE_SECRET_KEY||''));
   const setMemberSession=value=>res.setHeader('set-cookie',cookie+'='+value+cookieOptions.replace('Strict','Lax')+'; Max-Age=43200');
-  if(session?.temporary && !['/portal/me','/portal/password','/portal/logout','/portal/checkout-return'].includes(path))return fail(403,'Choose a password in your account first.');
+  if(session?.temporary && !['/portal/me','/portal/password','/portal/change-password','/portal/logout','/portal/checkout-return'].includes(path))return fail(403,'Choose a password in your account first.');
   if(req.method==='GET' && path==='/portal/me') {
     if(!session?.uid)return fail(401,'Sign in required.');
     const {subscription,invoices}=store.billing(session.uid,live);
@@ -94,6 +94,14 @@ export async function portal(req,res,path,store,readJson,json) {
     const claim=store.claimCheckout(orderProof,data.checkout);
     if(claim.token)setMemberSession(claim.token);
     return send({status:claim.status});
+  }
+  if(path==='/portal/change-password'){
+    if(!session?.uid)return fail(401,'Sign in required.');
+    if(limited('password:'+session.uid,5))return fail(429,'Too many attempts. Try again in a minute.');
+    if(typeof data.current!=='string'||data.current.length>256||typeof data.password!=='string'||data.password.length<10||data.password.length>256)return fail(400,'Enter your current password and a new password of 10–256 characters.');
+    const fresh=await store.changePassword(session.uid,data.current,data.password);
+    if(!fresh)return fail(401,'Current password is incorrect.');
+    setMemberSession(fresh);return send({});
   }
   if(path==='/portal/password'){
     if(!session?.temporary)return fail(403,'A new account sign-in is required.');

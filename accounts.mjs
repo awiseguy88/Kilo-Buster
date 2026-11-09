@@ -112,6 +112,17 @@ export function accounts(db, defaultLimit) {
         db.exec('COMMIT');return token;
       } catch(e){db.exec('ROLLBACK');throw e;}
     },
+    async changePassword(uid,current,password){
+      const user=query('SELECT username FROM users WHERE id=? AND disabled=0').get(uid);
+      if(!user || !await this.login(user.username,current)) return null;
+      const hash=await passwordHash(password);
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        query('UPDATE users SET password=?,temporary=0 WHERE id=? AND disabled=0').run(hash,uid);
+        query('DELETE FROM sessions WHERE uid=?').run(uid);
+        const token=this.newSession(uid); db.exec('COMMIT'); return token;
+      } catch(e){db.exec('ROLLBACK');throw e;}
+    },
     nextWelcome(){
       const row=query('SELECT sub,payload,attempts FROM welcome_mail WHERE sent IS NULL AND retry_at<=? ORDER BY retry_at LIMIT 1').get(Date.now());
       if(!row)return null;
