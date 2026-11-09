@@ -49,6 +49,10 @@ export function accounts(db, defaultLimit) {
         UPDATE users SET key_hash=NULL,suffix=NULL;`);
     }
     db.exec('CREATE INDEX IF NOT EXISTS key_window ON requests(key_id,at); COMMIT');
+    db.exec(`CREATE TABLE IF NOT EXISTS payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE, uid INTEGER NOT NULL,
+      quota INTEGER NOT NULL, amount INTEGER, currency TEXT, status TEXT NOT NULL DEFAULT 'pending',
+      created INTEGER NOT NULL, approved INTEGER NOT NULL DEFAULT 0)`);
   } catch(e) { db.exec('ROLLBACK'); throw e; }
   const lookup = query('SELECT u.id,k.id AS key_id,k.quota FROM api_keys k JOIN users u ON u.id=k.uid WHERE k.hash=? AND u.disabled=0 AND (k.expires IS NULL OR k.expires>?)');
   const view = `SELECT id,username,disabled,trial_until,total,input,output,
@@ -124,6 +128,9 @@ export function accounts(db, defaultLimit) {
       const row=query('SELECT a.secret,c.expires FROM trial_claims c JOIN api_keys a ON a.id=c.key_id WHERE c.claim_hash=? AND c.expires>?').get(digest(claim),Date.now());
       const key=reveal(row?.secret); return row&&key?{key,expires:row.expires}:null;
     },
+    recordPayment(eventId,uid,quota,amount,currency) { return query('INSERT OR IGNORE INTO payments(event_id,uid,quota,amount,currency,created) VALUES(?,?,?,?,?,?)').run(eventId,uid,quota,amount||null,currency||'usd',Date.now()).changes; },
+    payments() { return query('SELECT p.*,u.username FROM payments p LEFT JOIN users u ON u.id=p.uid ORDER BY p.created DESC').all(); },
+    approvePayment(id) { const p=query('SELECT uid,quota,status FROM payments WHERE id=?').get(id); if(!p)return null; const changed=query('UPDATE api_keys SET quota=? WHERE uid=?').run(p.quota,p.uid).changes; if(!changed) issue(p.uid,p.quota); query('UPDATE payments SET status=\'approved\',approved=1 WHERE id=?').run(id); return p; },
     assigned() { return query('SELECT COALESCE(SUM(k.quota),0) AS n FROM api_keys k JOIN users u ON u.id=k.uid WHERE u.disabled=0').get().n; },
     setKeyQuota(id,n) { return query('UPDATE api_keys SET quota=? WHERE id=?').run(n,id).changes; },
     setUserQuota(id,n) { const changed=query('UPDATE api_keys SET quota=? WHERE uid=?').run(n,id).changes; return changed || (issue(id,n)?1:0); },

@@ -59,6 +59,7 @@ export async function portal(req,res,path,store,readJson,json) {
   }
   if(req.method==='GET' && path==='/portal/me') return session?.uid ? send(store.user(session.uid)) : fail(401,'Sign in required.');
   if(req.method==='GET' && path==='/portal/users') return session?.admin ? send(store.list()) : fail(403,'Admin sign-in required.');
+  if(req.method==='GET' && path==='/portal/payments') return session?.admin ? send(store.payments()) : fail(403,'Admin sign-in required.');
   if(req.method!=='POST') return fail(404,'Page not found.');
   if(!browserWrite(req)) return fail(403,'A same-site JSON request is required.');
   let data;
@@ -123,6 +124,8 @@ export async function portal(req,res,path,store,readJson,json) {
     return send({url:result.url});
   }
   if(!session?.admin) return fail(403,'Admin sign-in required.');
+  const paymentAction=path.match(/^\/portal\/payments\/(\d+)\/approve$/);
+  if(paymentAction) return store.approvePayment(Number(paymentAction[1])) ? send({}) : fail(404,'Payment not found.');
   if(path==='/portal/users/create-with-key') {
     const {username,password,quota}=data;
     if(typeof username!=='string' || !/^[a-zA-Z0-9_-]{3,32}$/.test(username)) return fail(400,'Use 3–32 letters, numbers, underscores or hyphens for the username.');
