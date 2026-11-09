@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { createHash,randomBytes } from 'node:crypto';
+import { isIP } from 'node:net';
 import { sameSecret, validLimit } from './accounts.mjs';
 import { siteOrigin } from './welcome.mjs';
 
@@ -24,6 +25,13 @@ function limited(key,max) {
 
 export function sessionToken(req) {
   return (req.headers.cookie || '').split(';').map(s=>s.trim()).find(s=>s.startsWith(cookie+'='))?.slice(cookie.length+1) || '';
+}
+function clientIp(req) {
+  if(process.env.TRUST_PROXY==='1'){
+    const chain=String(req.headers['x-forwarded-for']||'').split(',').map(x=>x.trim()).filter(Boolean);
+    if(chain.at(-1)&&isIP(chain.at(-1)))return chain.at(-1);
+  }
+  return req.socket?.remoteAddress || 'unknown';
 }
 function trialToken(req) { return (req.headers.cookie || '').split(';').map(s=>s.trim()).find(s=>s.startsWith(trialCookie+'='))?.slice(trialCookie.length+1) || ''; }
 
@@ -59,7 +67,7 @@ export async function portal(req,res,path,store,readJson,json) {
   if(path==='/portal/trial' && req.method==='POST') {
     if(!browserWrite(req)) return fail(403,'A same-site JSON request is required.');
     if(secureClaim){const existing=store.getTrial(priorClaim);return existing?send(existing):fail(409,'Your trial has ended. Sign in to choose a plan.');}
-    if(limited('trial:'+req.socket.remoteAddress,4))return fail(429,'Too many new trial requests. Try again in a minute.');
+    if(limited('trial:'+clientIp(req),4))return fail(429,'Too many new trial requests. Try again in a minute.');
     const claim='v2_'+randomBytes(32).toString('base64url');
     const trial=await store.createTrial(claim);
     if(!trial) return fail(409,'A trial key has already been issued for this browser.');
@@ -67,18 +75,19 @@ export async function portal(req,res,path,store,readJson,json) {
     const protocol=req.headers['x-forwarded-proto']?.split(',')[0] || 'https';
     return send({key:trial.key,expires:trial.expires,endpoint:`${protocol}://${req.headers.host}/v1`});
   }
-  if (req.method==='GET' && ['/','/login','/register','/admin','/account','/admin/users','/setup','/welcome'].includes(path)) {
+  if (req.method==='GET' && ['/','/login','/register','/reset','/admin','/account','/admin/users','/setup','/welcome'].includes(path)) {
+    if ((path==='/login'||path==='/register') && session?.uid) return redirect('/account');
     if (path==='/admin/users' && !session?.admin) return redirect('/admin');
     if (path==='/account' && !session?.uid) return redirect('/login');
     res.writeHead(200,{'content-type':'text/html; charset=utf-8'});return res.end(html);
   }
   const live=Number(/^(sk|rk)_live_/.test(process.env.STRIPE_SECRET_KEY||''));
   const setMemberSession=value=>res.setHeader('set-cookie',cookie+'='+value+cookieOptions.replace('Strict','Lax')+'; Max-Age=43200');
-  if(session?.temporary && !['/portal/me','/portal/password','/portal/change-password','/portal/logout','/portal/checkout-return'].includes(path))return fail(403,'Choose a password in your account first.');
+  if(req.method==='GET' && path==='/portal/session') return send({signedIn:Boolean(session),admin:Boolean(session?.admin)});
   if(req.method==='GET' && path==='/portal/me') {
     if(!session?.uid)return fail(401,'Sign in required.');
     const {subscription,invoices}=store.billing(session.uid,live);
-    return send({...store.user(session.uid),paidUntil:subscription?.paid_until||null,invoices});
+    return send({...store.user(session.uid),temporary:session.temporary,paidUntil:subscription?.paid_until||null,invoices});
   }
   if(req.method==='GET' && path==='/portal/users') return session?.admin ? send(store.list()) : fail(403,'Admin sign-in required.');
   if(req.method==='GET' && path==='/portal/payments') return session?.admin ? send(store.payments()) : fail(403,'Admin sign-in required.');
@@ -88,6 +97,26 @@ export async function portal(req,res,path,store,readJson,json) {
   let data;
   try {data=await readJson(req,2048);} catch {return fail(400,'Invalid or oversized JSON.');}
   if (!data || typeof data!=='object') return fail(400,'Invalid request.');
+  if(path==='/portal/reset-request'){
+    if(limited('reset:'+clientIp(req),5))return fail(429,'Please wait before trying again.');
+    if(typeof data.email!=='string'||data.email.length>254||!/^\S+@\S+\.\S+$/.test(data.email))return fail(400,'Enter a valid email address.');
+    if(!process.env.RESEND_API_KEY||!process.env.USAGE_EMAIL_FROM)return fail(503,'Password reset email is unavailable. Contact support.');
+    if(typeof data.username!=='string'||!/^[a-zA-Z0-9_-]{3,32}$/.test(data.username))return fail(400,'Enter your username.');
+    const email=data.email.trim().toLowerCase(), reset=store.createReset(email,data.username);
+    if(reset){try{const response=await fetch('https://api.resend.com/emails',{method:'POST',signal:AbortSignal.timeout(10000),headers:{'Content-Type':'application/json',Authorization:'Bearer '+process.env.RESEND_API_KEY},body:JSON.stringify({from:process.env.USAGE_EMAIL_FROM,to:[email],subject:'Reset your Kilo Buster password',text:'Reset your password within 30 minutes: '+siteOrigin()+'/reset?token='+encodeURIComponent(reset)+'\nIf you did not request this, ignore this email.'})});if(!response.ok)console.error('[reset] email delivery failed',response.status)}catch{console.error('[reset] email delivery failed')}}
+    return send({message:'If an account exists for that email, a reset link has been sent.'});
+  }
+  if(path==='/portal/reset-password'){
+    if(limited('reset-confirm:'+clientIp(req),10))return fail(429,'Please wait before trying again.');
+    if(typeof data.token!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(data.token)||typeof data.password!=='string'||data.password.length<10||data.password.length>256)return fail(400,'Invalid reset link or password.');
+    return await store.resetPassword(data.token,data.password)?send({}):fail(400,'Reset link is invalid or expired.');
+  }
+  if(path==='/portal/account-trial'){
+    if(!session?.uid)return fail(401,'Sign in required.');
+    if(limited('trial:'+clientIp(req),4))return fail(429,'Too many new trial requests. Try again in a minute.');
+    const trial=store.createAccountTrial(session.uid);
+    return trial?send(trial):fail(409,'This account has already used its trial.');
+  }
   const orderProof=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith(orderCookie+'='))?.slice(orderCookie.length+1);
   if(path==='/portal/checkout-return'){
     if(!orderProof||typeof data.checkout!=='string'||data.checkout.length>255)return send({status:'unavailable'});
@@ -115,7 +144,7 @@ export async function portal(req,res,path,store,readJson,json) {
   }
   if(['/portal/login','/portal/register','/portal/admin'].includes(path)) {
     const {username,password}=data;
-    const ip=req.socket?.remoteAddress || 'local';
+    const ip=clientIp(req);
     if(limited(path+ip,40)) return fail(429,'Too many attempts. Try again in a minute.');
     if(typeof password!=='string' || password.length>256) return fail(400,'Invalid password.');
     let uid=null;
@@ -127,7 +156,8 @@ export async function portal(req,res,path,store,readJson,json) {
       if(typeof username!=='string' || !/^[a-zA-Z0-9_-]{3,32}$/.test(username)) return fail(400,'Use 3–32 letters, numbers, underscores or hyphens for your username.');
       if(path==='/portal/register') {
         if(password.length<10) return fail(400,'Use at least 10 characters for your password.');
-        if(!await store.register(username,password)) return fail(409,'Username unavailable.');
+        if(data.email!==undefined&&(typeof data.email!=='string'||data.email.length>254||!/^\S+@\S+\.\S+$/.test(data.email)))return fail(400,'Enter a valid email address.');
+        if(!await store.register(username,password,data.email?.trim().toLowerCase())) return fail(409,'Username unavailable.');
       }
       uid=await store.login(username,password);
       if(!uid) return fail(401,'Sign-in failed.');
@@ -183,7 +213,7 @@ export async function portal(req,res,path,store,readJson,json) {
       form.set('success_url',origin+'/account?billing=success');
       form.set('cancel_url',origin+'/account?billing=cancelled');
     }else{
-      if(limited('checkout:'+req.socket.remoteAddress,30))return fail(429,'Please wait a minute before starting another checkout.');
+      if(limited('checkout:'+clientIp(req),30))return fail(429,'Please wait a minute before starting another checkout.');
       const proof=/^[A-Za-z0-9_-]{43}$/.test(orderProof||'')?orderProof:randomBytes(32).toString('base64url');
       order=store.startGuestOrder(proof,Number(data.price));
       form.set('subscription_data[metadata][guest_order]',order);

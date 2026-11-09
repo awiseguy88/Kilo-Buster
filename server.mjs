@@ -149,6 +149,13 @@ function markSuccess(proxy) { proxy.successes++; proxy.consecutiveFailures = 0; 
 function markFailure(proxy, error) { proxy.failures++; proxy.consecutiveFailures++; proxy.backoffUntil = Date.now() + Math.min(15 * 60 * 1000, BACKOFF_BASE * 2 ** Math.min(proxy.consecutiveFailures - 1, 8)); proxy.lastError = String(error?.message || error).slice(0, 240); scheduleSave(); }
 function cors(res) { res.setHeader('access-control-allow-origin','*'); res.setHeader('access-control-allow-methods','GET, POST, OPTIONS'); res.setHeader('access-control-allow-headers','Content-Type, Authorization'); }
 function json(res, status, data) { res.writeHead(status, {'content-type':'application/json'}); res.end(JSON.stringify(data)); }
+function responseHeaders(upstream) {
+  const headers=Object.fromEntries(upstream.headers);
+  const hop=['connection','keep-alive','proxy-authenticate','proxy-authorization','te','trailer','transfer-encoding','upgrade','content-encoding','content-length'];
+  for(const name of (headers.connection||'').split(',')) if(name.trim()) delete headers[name.trim().toLowerCase()];
+  for(const name of hop) delete headers[name];
+  return headers;
+}
 async function readJson(req,limit=4*1024*1024) {
   const chunks=[]; let size=0;
   for await (const chunk of req) {
@@ -172,6 +179,7 @@ async function handler(req, res) {
   res.setHeader('cache-control','no-store');
   res.setHeader('referrer-policy','no-referrer');
   res.setHeader('x-frame-options','DENY');
+  if(req.method==='GET' && path==='/healthz') return json(res,200,{status:'ok'});
   if(req.method==='GET' && path==='/favicon.ico'){
     res.writeHead(200,{'content-type':'image/x-icon','cache-control':'public, max-age=3600'});
     return res.end(await readFile(join(ROOT,'assets/KiloBuster.ico')));
@@ -197,7 +205,7 @@ async function handler(req, res) {
     res.writeHead(200,{'content-type':file.endsWith('.css')?'text/css':'text/javascript'});
     return res.end(await readFile(join(ROOT,file)));
   }
-  if (['/','/admin','/account','/admin/users','/login','/register','/setup','/welcome'].includes(path) || path.startsWith('/portal/')) {
+  if (['/','/admin','/account','/admin/users','/login','/register','/reset','/setup','/welcome'].includes(path) || path.startsWith('/portal/')) {
     return portal(req,res,path,store,readJson,json);
   }
   const adminRoute=['/dashboard','/api/proxies/import','/health/stats','/admin/allocation'].includes(path);
@@ -241,7 +249,7 @@ async function handler(req, res) {
   for (let i=0; i<attempts; i++) { const proxy = pickProxy(); if (!proxy) return json(res, 429, { error: { message: 'All proxies are at their hourly quota or cooling down.', type: 'rate_limit_error' } }); const controller = new AbortController();
     const cancel = () => controller.abort();
     res.once("close", cancel);
-    try { if (res.destroyed) return; const headers = {'content-type':'application/json',accept:req.headers.accept || 'application/json','x-kilocode-mode':req.headers['x-kilocode-mode'] || 'coding'}; if (KILO_API_KEY) headers.authorization = `Bearer ${KILO_API_KEY}`; const started = performance.now(); const upstream = await fetch(UPSTREAM,{method:'POST',signal:controller.signal,headers,body:JSON.stringify(body),dispatcher:agents.get(proxy.url.href)}); if (upstream.ok) { const ms = Math.max(1, performance.now() - started); proxy.latencyMs = Math.round(proxy.latencyMs ? 0.7 * proxy.latencyMs + 0.3 * ms : ms); } console.log(`[request] proxy=${proxy.id} status=${upstream.status} tools=${Array.isArray(body.tools) ? body.tools.length : 0} stream=${Boolean(body.stream)}`); if (upstream.status >= 500) { markFailure(proxy, `Kilo returned HTTP ${upstream.status}`); await upstream.body?.cancel(); last = new Error(`Kilo returned HTTP ${upstream.status}`); continue; } markSuccess(proxy); res.writeHead(upstream.status,Object.fromEntries(upstream.headers)); if (upstream.body) await forwardBody(upstream, res, user.id); return res.end(); } catch (e) { if (controller.signal.aborted) return; markFailure(proxy, e); if (res.headersSent) return res.destroy(); last=e;
+    try { if (res.destroyed) return; const headers = {'content-type':'application/json',accept:req.headers.accept || 'application/json','x-kilocode-mode':req.headers['x-kilocode-mode'] || 'coding'}; if (KILO_API_KEY) headers.authorization = `Bearer ${KILO_API_KEY}`; const started = performance.now(); const upstream = await fetch(UPSTREAM,{method:'POST',signal:controller.signal,headers,body:JSON.stringify(body),dispatcher:agents.get(proxy.url.href)}); if (upstream.ok) { const ms = Math.max(1, performance.now() - started); proxy.latencyMs = Math.round(proxy.latencyMs ? 0.7 * proxy.latencyMs + 0.3 * ms : ms); } console.log(`[request] proxy=${proxy.id} status=${upstream.status} tools=${Array.isArray(body.tools) ? body.tools.length : 0} stream=${Boolean(body.stream)}`); if (upstream.status >= 500) { markFailure(proxy, `Kilo returned HTTP ${upstream.status}`); await upstream.body?.cancel(); last = new Error(`Kilo returned HTTP ${upstream.status}`); continue; } markSuccess(proxy); res.writeHead(upstream.status,responseHeaders(upstream)); if (upstream.body) await forwardBody(upstream, res, user.id); return res.end(); } catch (e) { if (controller.signal.aborted) return; markFailure(proxy, e); if (res.headersSent) return res.destroy(); last=e;
     } finally {
       res.off("close", cancel);
       proxy.active--;
@@ -249,10 +257,15 @@ async function handler(req, res) {
   }
   return json(res,502,{error:{message:`All proxy attempts failed: ${last?.message || 'unknown error'}`,type:'api_connection_error'}});
 }
-if (process.env.KILO_BUSTER_TEST !== '1') http.createServer((req,res)=>handler(req,res).catch(error=> {
+if (process.env.KILO_BUSTER_TEST !== '1') {
+  const refreshProxies=()=>importProxies().catch(error=>console.error('[proxy] automatic import failed:',error.message));
+  void refreshProxies();
+  const refreshTimer=setInterval(refreshProxies,45*60*1000);refreshTimer.unref();
+  http.createServer((req,res)=>handler(req,res).catch(error=> {
   console.error('[http] request failed:',error?.stack||error);
   if(res.headersSent) return res.destroy();
   json(res,500,{error:{message:'Internal server error.'}});
-})).listen(PORT,HOST,()=>console.log(`API listening on ${HOST}:${PORT}`));
+  })).listen(PORT,HOST,()=>console.log(`API listening on ${HOST}:${PORT}`));
+}
 export { handler, tokenDb }; 
 

@@ -39,6 +39,7 @@ export function publicPage(path) {
     </main><footer>Operated by Aaron Wise AI · Independent of Kilo, OpenAI and Anthropic. <a href="mailto:aaronwise@aaronwiseai.com">Contact support</a> <a href="${repo}" class="github-link">${github} Self-host on GitHub</a></footer>
     <script>
     const choices = [...document.querySelectorAll('[data-plan]')];
+    fetch('/portal/session').then(r=>r.json()).then(session=>{if(!session.signedIn)return;const nav=document.querySelector('header nav');nav.querySelectorAll('a[href="/login"],a[href="/register"]').forEach(a=>a.remove());const account=document.createElement('a');account.href=session.admin?'/dashboard':'/account';account.textContent=session.admin?'Admin dashboard':'My account';nav.append(account);const signout=document.createElement('button');signout.type='button';signout.textContent='Sign out';signout.onclick=async()=>{const r=await fetch('/portal/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(r.ok)location.reload()};nav.append(signout);document.querySelectorAll('details a[href="/login"]').forEach(a=>{a.href=account.href;a.textContent=account.textContent})}).catch(()=>{});
     for (const choice of choices) choice.onclick = async () => {
       const status = document.getElementById('checkout-status');
       choices.forEach(b => b.disabled = true);
