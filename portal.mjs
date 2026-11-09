@@ -34,6 +34,11 @@ export function browserWrite(req) {
 }
 
 export async function portal(req,res,path,store,readJson,json) {
+  const token=sessionToken(req);
+  const session=token && store.session(token);
+  const fail=(status,message)=>json(res,status,{error:{message}});
+  const send=data=>json(res,200,data);
+  const redirect=location=>{res.writeHead(303,{location});res.end();};
   if(path==='/portal/art.png' && req.method==='GET') {
     res.writeHead(200,{'content-type':'image/png','cache-control':'public, max-age=86400'});
     return res.end(artwork);
@@ -47,11 +52,6 @@ export async function portal(req,res,path,store,readJson,json) {
     const protocol=req.headers['x-forwarded-proto']?.split(',')[0] || 'https';
     return send({key:trial.key,expires:trial.expires,endpoint:`${protocol}://${req.headers.host}/v1`});
   }
-  const token=sessionToken(req);
-  const session=token && store.session(token);
-  const fail=(status,message)=>json(res,status,{error:{message}});
-  const send=data=>json(res,200,data);
-  const redirect=location=>{res.writeHead(303,{location});res.end();};
   if (req.method==='GET' && ['/','/login','/register','/admin','/account','/admin/users','/setup'].includes(path)) {
     if (path==='/admin/users' && !session?.admin) return redirect('/admin');
     if (path==='/account' && !session?.uid) return redirect('/login');
