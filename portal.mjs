@@ -44,7 +44,8 @@ export async function portal(req,res,path,store,readJson,json) {
     const trial=await store.createTrial(claim);
     if(!trial) return fail(409,'A trial key has already been issued for this browser.');
     res.setHeader('set-cookie',trialCookie+'='+claim+cookieOptions+'; Max-Age=259200');
-    return send({key:trial.key,expires:trial.expires,endpoint:`${new URL(req.url,'http://localhost').origin}/v1`});
+    const protocol=req.headers['x-forwarded-proto']?.split(',')[0] || 'https';
+    return send({key:trial.key,expires:trial.expires,endpoint:`${protocol}://${req.headers.host}/v1`});
   }
   const token=sessionToken(req);
   const session=token && store.session(token);
