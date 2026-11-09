@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { createHash,randomBytes } from 'node:crypto';
 import { sameSecret, validLimit } from './accounts.mjs';
 
 const html = await readFile(new URL('./portal.html', import.meta.url));
@@ -43,10 +43,23 @@ export async function portal(req,res,path,store,readJson,json) {
     res.writeHead(200,{'content-type':'image/png','cache-control':'public, max-age=86400'});
     return res.end(artwork);
   }
+  const priorClaim=trialToken(req), secureClaim=/^v2_[A-Za-z0-9_-]{43}$/.test(priorClaim);
+  if(path==='/portal/trial/current' && req.method==='GET')return send(secureClaim?store.getTrial(priorClaim)||{}:{});
+  if(path==='/portal/trial/migrate' && req.method==='POST'){
+    if(!browserWrite(req)||!priorClaim||secureClaim)return fail(403,'Trial proof required.');
+    const old=store.getTrial(priorClaim), supplied=req.headers.authorization;
+    if(!old||!sameSecret(supplied||'','Bearer '+old.key))return fail(403,'Trial proof required.');
+    const fresh='v2_'+randomBytes(32).toString('base64url');
+    store.moveTrial(priorClaim,fresh);
+    res.setHeader('set-cookie',trialCookie+'='+fresh+cookieOptions+'; Max-Age='+Math.ceil((old.expires-Date.now())/1000));
+    return send(old);
+  }
   if(path==='/portal/trial' && req.method==='POST') {
     if(!browserWrite(req)) return fail(403,'A same-site JSON request is required.');
-    const claim=trialToken(req) || createHash('sha256').update((req.headers['user-agent']||'')+'|'+(req.socket?.remoteAddress||'')).digest('hex');
-    const trial=await store.createTrial(claim) || store.getTrial(claim);
+    if(secureClaim){const existing=store.getTrial(priorClaim);return existing?send(existing):fail(409,'Your trial has ended. Sign in to choose a plan.');}
+    if(limited('trial:'+req.socket.remoteAddress,4))return fail(429,'Too many new trial requests. Try again in a minute.');
+    const claim='v2_'+randomBytes(32).toString('base64url');
+    const trial=await store.createTrial(claim);
     if(!trial) return fail(409,'A trial key has already been issued for this browser.');
     res.setHeader('set-cookie',trialCookie+'='+claim+cookieOptions+'; Max-Age=259200');
     const protocol=req.headers['x-forwarded-proto']?.split(',')[0] || 'https';
@@ -57,7 +70,12 @@ export async function portal(req,res,path,store,readJson,json) {
     if (path==='/account' && !session?.uid) return redirect('/login');
     res.writeHead(200,{'content-type':'text/html; charset=utf-8'});return res.end(html);
   }
-  if(req.method==='GET' && path==='/portal/me') return session?.uid ? send(store.user(session.uid)) : fail(401,'Sign in required.');
+  const live=Number(/^(sk|rk)_live_/.test(process.env.STRIPE_SECRET_KEY||''));
+  if(req.method==='GET' && path==='/portal/me') {
+    if(!session?.uid)return fail(401,'Sign in required.');
+    const {subscription,invoices}=store.billing(session.uid,live);
+    return send({...store.user(session.uid),paidUntil:subscription?.paid_until||null,invoices});
+  }
   if(req.method==='GET' && path==='/portal/users') return session?.admin ? send(store.list()) : fail(403,'Admin sign-in required.');
   if(req.method==='GET' && path==='/portal/payments') return session?.admin ? send(store.payments()) : fail(403,'Admin sign-in required.');
   if(req.method==='GET' && path==='/portal/sales') return session?.admin ? send(store.salesStats()) : fail(403,'Admin sign-in required.');
@@ -88,7 +106,7 @@ export async function portal(req,res,path,store,readJson,json) {
       uid=await store.login(username,password);
       if(!uid) return fail(401,'Sign-in failed.');
     }
-    res.setHeader('set-cookie',cookie+'='+store.newSession(uid)+cookieOptions+'; Max-Age=43200');
+    res.setHeader('set-cookie',cookie+'='+store.newSession(uid)+(uid===null?cookieOptions:cookieOptions.replace('Strict','Lax'))+'; Max-Age=43200');
     return send({location:uid===null?'/dashboard':'/account'});
   }
   if(path==='/portal/usage-request') {
@@ -113,15 +131,23 @@ export async function portal(req,res,path,store,readJson,json) {
       return send({accepted:true});
     } catch {return fail(502,'Email delivery could not be confirmed. Please try again.');}
   }
-  if(path==='/portal/checkout') {
+  if(path==='/portal/checkout'||path==='/portal/billing-portal') {
     if(!session?.uid) return fail(403,'User sign-in required.');
     if(!process.env.STRIPE_SECRET_KEY) return fail(503,'Stripe is not configured yet.');
     const prices={2500:process.env.STRIPE_PRICE_2500,5000:process.env.STRIPE_PRICE_5000,7500:process.env.STRIPE_PRICE_7500,10000:process.env.STRIPE_PRICE_10000};
-    const price=prices[data.price]; if(!price) return fail(400,'Invalid plan.');
     const origin=`${req.headers['x-forwarded-proto']?.split(',')[0]||'https'}://${req.headers.host}`;
+    const sub=store.billing(session.uid,live).subscription;
+    if(path==='/portal/billing-portal'){
+      if(!sub?.customer)return fail(409,'No linked subscription.');
+      const result=await fetch('https://api.stripe.com/v1/billing_portal/sessions',{method:'POST',headers:{Authorization:'Bearer '+process.env.STRIPE_SECRET_KEY},body:new URLSearchParams({customer:sub.customer,return_url:origin+'/account'}),signal:AbortSignal.timeout(12000)});
+      if(!result.ok)return fail(502,'Billing management is temporarily unavailable. Contact support.');
+      return send({url:(await result.json()).url});
+    }
+    if(sub)return fail(409,'Use Manage billing for your existing subscription.');
+    const price=Object.hasOwn(prices,data.price)&&prices[data.price]; if(!price) return fail(400,'Invalid plan.');
     const form=new URLSearchParams({mode:'subscription','success_url':origin+'/account?billing=success','cancel_url':origin+'/account?billing=cancelled','client_reference_id':String(session.uid),'metadata[uid]':String(session.uid),'metadata[quota]':String(data.price),'line_items[0][price]':price,'line_items[0][quantity]':'1','subscription_data[metadata][uid]':String(session.uid),'subscription_data[metadata][quota]':String(data.price)});
-    const response=await fetch('https://api.stripe.com/v1/checkout/sessions',{method:'POST',headers:{Authorization:'Bearer '+process.env.STRIPE_SECRET_KEY,'Content-Type':'application/x-www-form-urlencoded'},body:form});
-    const result=await response.json(); if(!response.ok||!result.url) { console.error('[stripe] checkout failed',response.status,result?.error?.type||'unknown',result?.error?.message||'no checkout URL'); return fail(502,'Stripe Checkout could not be created: '+(result?.error?.message||'check Stripe configuration.')); }
+    const response=await fetch('https://api.stripe.com/v1/checkout/sessions',{method:'POST',headers:{Authorization:'Bearer '+process.env.STRIPE_SECRET_KEY,'Content-Type':'application/x-www-form-urlencoded'},body:form,signal:AbortSignal.timeout(12000)});
+    const result=await response.json(); if(!response.ok||!result.url) { console.error('[stripe] checkout failed',response.status,result?.error?.code||result?.error?.type||'unknown',response.headers.get('request-id')); return fail(502,'Checkout is unavailable. Please try again or contact support.'); }
     return send({url:result.url});
   }
   if(!session?.admin) return fail(403,'Admin sign-in required.');

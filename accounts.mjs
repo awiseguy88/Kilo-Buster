@@ -40,6 +40,7 @@ export function accounts(db, defaultLimit) {
       CREATE INDEX IF NOT EXISTS keys_owner ON api_keys(uid);`);
     if (!query("SELECT 1 FROM pragma_table_info('api_keys') WHERE name='secret'").get()) db.exec('ALTER TABLE api_keys ADD COLUMN secret TEXT');
     if (!query("SELECT 1 FROM pragma_table_info('users') WHERE name='trial_until'").get()) db.exec('ALTER TABLE users ADD COLUMN trial_until INTEGER');
+    if (!query("SELECT 1 FROM pragma_table_info('users') WHERE name='joined_at'").get()) db.exec('ALTER TABLE users ADD COLUMN joined_at INTEGER');
     if (!query("SELECT 1 FROM pragma_table_info('api_keys') WHERE name='expires'").get()) db.exec('ALTER TABLE api_keys ADD COLUMN expires INTEGER');
     db.exec('CREATE TABLE IF NOT EXISTS trial_claims (claim_hash TEXT PRIMARY KEY, key_id INTEGER NOT NULL, expires INTEGER NOT NULL)');
     if (!query("SELECT 1 FROM pragma_table_info('requests') WHERE name='key_id'").get()) {
@@ -48,19 +49,24 @@ export function accounts(db, defaultLimit) {
         UPDATE requests SET key_id=(SELECT id FROM api_keys WHERE uid=requests.uid);
         UPDATE users SET key_hash=NULL,suffix=NULL;`);
     }
-    db.exec('CREATE INDEX IF NOT EXISTS key_window ON requests(key_id,at); COMMIT');
+    db.exec('CREATE INDEX IF NOT EXISTS key_window ON requests(key_id,at)');
     db.exec(`CREATE TABLE IF NOT EXISTS payments (
       id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE, uid INTEGER NOT NULL,
       quota INTEGER NOT NULL, amount INTEGER, currency TEXT, status TEXT NOT NULL DEFAULT 'pending',
-      created INTEGER NOT NULL, approved INTEGER NOT NULL DEFAULT 0)`);
+      created INTEGER NOT NULL, approved INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS subscriptions(sub TEXT PRIMARY KEY,uid INTEGER,customer TEXT,key_id INTEGER,paid_until INTEGER DEFAULT 0,ended INTEGER DEFAULT 0,live INTEGER,last_paid INTEGER DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS invoices(invoice TEXT PRIMARY KEY,sub TEXT NOT NULL,uid INTEGER NOT NULL,quota INTEGER NOT NULL,amount INTEGER NOT NULL,paid INTEGER NOT NULL,url TEXT,live INTEGER NOT NULL,renewal INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS invoices_owner ON invoices(uid,paid);
+      COMMIT`);
   } catch(e) { db.exec('ROLLBACK'); throw e; }
-  const lookup = query('SELECT u.id,k.id AS key_id,k.quota FROM api_keys k JOIN users u ON u.id=k.uid WHERE k.hash=? AND u.disabled=0 AND (k.expires IS NULL OR k.expires>?)');
+  const mode=()=>Number(/^(sk|rk)_live_/.test(process.env.STRIPE_SECRET_KEY||''));
+  const lookup = query('SELECT u.id,k.id AS key_id,k.quota FROM api_keys k JOIN users u ON u.id=k.uid LEFT JOIN subscriptions s ON s.key_id=k.id WHERE k.hash=? AND u.disabled=0 AND (k.expires IS NULL OR k.expires>?) AND (s.sub IS NULL OR s.live=? AND s.ended=0)');
   const view = `SELECT id,username,disabled,trial_until,total,input,output,
     (SELECT count(*) FROM requests r WHERE r.uid=u.id AND r.at>?) AS used FROM users u`;
-  const keyRows=query(`SELECT k.id,k.suffix,k.quota,k.expires,count(r.at) AS used FROM api_keys k
-    LEFT JOIN requests r ON r.key_id=k.id AND r.at>? WHERE k.uid=? GROUP BY k.id ORDER BY k.id`);
+  const keyRows=query(`SELECT k.id,k.suffix,k.quota,k.expires,count(r.at) AS used FROM api_keys k LEFT JOIN subscriptions s ON s.key_id=k.id
+    LEFT JOIN requests r ON r.key_id=k.id AND r.at>? WHERE k.uid=? AND (k.expires IS NULL OR k.expires>?) AND (s.sub IS NULL OR s.live=? AND s.ended=0) GROUP BY k.id ORDER BY k.id`);
   const summary = (row,revealKeys=false) => {
-    const keys=keyRows.all(Date.now()-hour,row.id).map(k=>({...k,remaining:Math.max(0,k.quota-k.used)}));
+    const keys=keyRows.all(Date.now()-hour,row.id,Date.now(),mode()).map(k=>({...k,remaining:Math.max(0,k.quota-k.used)}));
     return {...row,keys,quota:keys.reduce((n,k)=>n+k.quota,0),remaining:keys.reduce((n,k)=>n+k.remaining,0)};
   };
   const adminTag = () => process.env.ADMIN_PASSWORD ? digest(process.env.ADMIN_PASSWORD) : '';
@@ -68,7 +74,7 @@ export function accounts(db, defaultLimit) {
     const salt=secret();
     return salt+'.'+(await derive(password,salt,64)).toString('hex');
   }
-  const insertUser=query('INSERT INTO users(username,password,quota) VALUES(?,?,?) ON CONFLICT(username) DO NOTHING');
+  const insertUser=query("INSERT INTO users(username,password,quota,joined_at) VALUES(?,?,?,unixepoch()*1000) ON CONFLICT(username) DO NOTHING");
   function issue(id,quota) {
     const key='kb_'+secret();
     return query('INSERT INTO api_keys(uid,hash,suffix,quota,secret,expires) SELECT id,?,?,?, ?,NULL FROM users WHERE id=? AND disabled=0')
@@ -109,14 +115,46 @@ export function accounts(db, defaultLimit) {
     user(id) { const row=query(view+' WHERE id=?').get(Date.now()-hour,id); if(!row) return null; const result=summary(row); result.keys=result.keys.map(k=>({...k,key:reveal(query('SELECT secret FROM api_keys WHERE id=?').get(k.id)?.secret)})); return result; },
     list() { return query(view+' ORDER BY username').all(Date.now()-hour).map(summary); },
     defaultLimit,
+    paidInvoice(p){
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const u=query('SELECT disabled FROM users WHERE id=?').get(p.uid);
+        const old=query('SELECT * FROM subscriptions WHERE sub=?').get(p.sub);
+        if(!u||(old?.uid&&old.uid!==p.uid))throw Error('Invoice account mismatch');
+        const added=query('INSERT OR IGNORE INTO invoices VALUES(?,?,?,?,?,?,?,?,?)')
+          .run(p.invoice,p.sub,p.uid,p.quota,p.amount,p.paid,p.url,p.live,p.renewal).changes;
+        const current=!old || p.end>old.paid_until || (p.end===old.paid_until&&p.paid>=old.last_paid);
+        if(added&&!old?.ended&&!u.disabled&&current&&p.end>Date.now()){
+          let keyId=old?.key_id;
+          if(!old){const key=issue(p.uid,p.quota);keyId=query('SELECT id FROM api_keys WHERE hash=?').get(digest(key)).id;}
+          query('UPDATE api_keys SET expires=?,quota=? WHERE id=? AND uid=?').run(p.end,p.quota,keyId,p.uid);
+          query('INSERT INTO subscriptions(sub,uid,customer,key_id,paid_until,live,last_paid) VALUES(?,?,?,?,?,?,?) ON CONFLICT(sub) DO UPDATE SET paid_until=excluded.paid_until,last_paid=excluded.last_paid')
+            .run(p.sub,p.uid,p.customer,keyId,p.end,p.live,p.paid);
+        }
+        db.exec('COMMIT');
+      }catch(e){db.exec('ROLLBACK');throw e;}
+    },
+    endSubscription(sub){
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        query('DELETE FROM api_keys WHERE id=(SELECT key_id FROM subscriptions WHERE sub=?)').run(sub);
+        query('INSERT INTO subscriptions(sub,ended) VALUES(?,1) ON CONFLICT(sub) DO UPDATE SET ended=1').run(sub);
+        db.exec('COMMIT');
+      }catch(e){db.exec('ROLLBACK');throw e;}
+    },
+    billing(uid,live){
+      return {subscription:query('SELECT customer,paid_until FROM subscriptions WHERE uid=? AND live=? AND ended=0 ORDER BY paid_until DESC LIMIT 1').get(uid,live),
+        invoices:query('SELECT amount,paid,url,quota FROM invoices WHERE uid=? AND live=? ORDER BY paid DESC LIMIT 20').all(uid,live)};
+    },
     async createTrial(claim) {
       const claimHash=digest(claim), now=Date.now(), expires=now+3*24*hour;
+      const hash=await passwordHash(secret());
       db.exec('BEGIN IMMEDIATE');
       try {
         query('DELETE FROM trial_claims WHERE expires<=?').run(now);
         if(query('SELECT 1 FROM trial_claims WHERE claim_hash=?').get(claimHash)) { db.exec('ROLLBACK'); return null; }
         const username='trial_'+randomBytes(10).toString('hex');
-        const password=secret(), user=insertUser.run(username,await passwordHash(password),defaultLimit);
+        const user=insertUser.run(username,hash,defaultLimit);
         const key='kb_'+secret();
         const result=query('INSERT INTO api_keys(uid,hash,suffix,quota,secret,expires) VALUES(?,?,?,?,?,?)').run(user.lastInsertRowid,digest(key),key.slice(-6),750,protect(key),expires);
         query('UPDATE users SET trial_until=? WHERE id=?').run(expires,user.lastInsertRowid);
@@ -124,15 +162,22 @@ export function accounts(db, defaultLimit) {
         db.exec('COMMIT'); return {key,expires};
       } catch(e) { db.exec('ROLLBACK'); throw e; }
     },
+    moveTrial(old,fresh){query('UPDATE trial_claims SET claim_hash=? WHERE claim_hash=?').run(digest(fresh),digest(old));},
     getTrial(claim) {
       const row=query('SELECT a.secret,c.expires FROM trial_claims c JOIN api_keys a ON a.id=c.key_id WHERE c.claim_hash=? AND c.expires>?').get(digest(claim),Date.now());
       const key=reveal(row?.secret); return row&&key?{key,expires:row.expires}:null;
     },
     recordPayment(eventId,uid,quota,amount,currency) { return query('INSERT OR IGNORE INTO payments(event_id,uid,quota,amount,currency,created) VALUES(?,?,?,?,?,?)').run(eventId,uid,quota,amount||null,currency||'usd',Date.now()).changes; },
     payments() { return query('SELECT p.*,u.username FROM payments p LEFT JOIN users u ON u.id=p.uid ORDER BY p.created DESC').all(); },
-    salesStats() { const now=Date.now(), d=new Date(now), day=new Date(d.getFullYear(),d.getMonth(),d.getDate()).getTime(), week=day-((d.getDay()+6)%7)*86400000, month=new Date(d.getFullYear(),d.getMonth(),1).getTime(); const sum=s=>query('SELECT COALESCE(SUM(amount),0) AS cents,COUNT(*) AS count FROM payments WHERE status=\'approved\' AND created>=?').get(s); const customers=query(`SELECT u.username,MIN(p.created) AS joined,COUNT(p.id) AS renewals,COALESCE(SUM(CASE WHEN p.status='approved' THEN p.amount ELSE 0 END),0) AS cents FROM users u JOIN payments p ON p.uid=u.id GROUP BY u.id ORDER BY joined DESC`).all(); return {today:sum(day),week:sum(week),month:sum(month),total:query("SELECT COALESCE(SUM(amount),0) AS cents,COUNT(*) AS count FROM payments WHERE status='approved'").get(),customers}; },
+    salesStats() {
+      const live=Number(/^(sk|rk)_live_/.test(process.env.STRIPE_SECRET_KEY||''));
+      const d=new Date(), day=Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate());
+      const sum=since=>query('SELECT COALESCE(SUM(amount),0) AS cents,COUNT(*) AS count FROM invoices WHERE live=? AND paid>=?').get(live,since);
+      const customers=query('SELECT u.username,u.joined_at,MIN(i.paid) AS first_paid,SUM(i.renewal) AS renewals,SUM(i.amount) AS cents FROM invoices i JOIN users u ON i.uid=u.id WHERE i.live=? GROUP BY u.id ORDER BY first_paid DESC').all(live);
+      return {live,today:sum(day),week:sum(day-((d.getUTCDay()+6)%7)*86400000),month:sum(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),1)),total:sum(0),customers};
+    },
     approvePayment(id) { const p=query('SELECT uid,quota,status FROM payments WHERE id=?').get(id); if(!p)return null; const changed=query('UPDATE api_keys SET quota=? WHERE uid=?').run(p.quota,p.uid).changes; if(!changed) issue(p.uid,p.quota); query('UPDATE payments SET status=\'approved\',approved=1 WHERE id=?').run(id); return p; },
-    assigned() { return query('SELECT COALESCE(SUM(k.quota),0) AS n FROM api_keys k JOIN users u ON u.id=k.uid WHERE u.disabled=0').get().n; },
+    assigned() { return query('SELECT COALESCE(SUM(k.quota),0) AS n FROM api_keys k JOIN users u ON u.id=k.uid LEFT JOIN subscriptions s ON s.key_id=k.id WHERE u.disabled=0 AND (k.expires IS NULL OR k.expires>?) AND (s.sub IS NULL OR s.live=? AND s.ended=0)').get(Date.now(),mode()).n; },
     setKeyQuota(id,n) { return query('UPDATE api_keys SET quota=? WHERE id=?').run(n,id).changes; },
     setUserQuota(id,n) { const changed=query('UPDATE api_keys SET quota=? WHERE uid=?').run(n,id).changes; return changed || (issue(id,n)?1:0); },
     deleteKey(id) { return query('DELETE FROM api_keys WHERE id=?').run(id).changes; },
@@ -147,12 +192,12 @@ export function accounts(db, defaultLimit) {
     },
     enable(id) { query('UPDATE users SET disabled=0 WHERE id=?').run(id); },
     issue,
-    byKey(key) { return lookup.get(digest(key),Date.now()); },
+    byKey(key) { return lookup.get(digest(key),Date.now(),mode()); },
     reserve(key,now=Date.now()) {
       db.exec('BEGIN IMMEDIATE');
       try {
         query('DELETE FROM requests WHERE at<=?').run(now-hour);
-        const user=lookup.get(digest(key),now);
+        const user=lookup.get(digest(key),now,mode());
         let status=401;
         if(user) {
           const {used}=query('SELECT count(*) AS used FROM requests WHERE key_id=?').get(user.key_id);
