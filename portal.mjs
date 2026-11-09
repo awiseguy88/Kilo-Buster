@@ -5,6 +5,7 @@ import { sameSecret, validLimit } from './accounts.mjs';
 const html = await readFile(new URL('./portal.html', import.meta.url));
 const artwork = await readFile(new URL('./assets/Kilo Buster_ Breaking Network Chains.png',import.meta.url));
 const cookie = '__Host-kb_session';
+const trialCookie = '__Host-kb_trial';
 const cookieOptions = '; Path=/; HttpOnly; SameSite=Strict; Secure';
 const attempts = new Map();
 const cleanup = setInterval(() => {
@@ -22,6 +23,7 @@ function limited(key,max) {
 export function sessionToken(req) {
   return (req.headers.cookie || '').split(';').map(s=>s.trim()).find(s=>s.startsWith(cookie+'='))?.slice(cookie.length+1) || '';
 }
+function trialToken(req) { return (req.headers.cookie || '').split(';').map(s=>s.trim()).find(s=>s.startsWith(trialCookie+'='))?.slice(trialCookie.length+1) || ''; }
 
 export function browserWrite(req) {
   try {
@@ -35,6 +37,14 @@ export async function portal(req,res,path,store,readJson,json) {
   if(path==='/portal/art.png' && req.method==='GET') {
     res.writeHead(200,{'content-type':'image/png','cache-control':'public, max-age=86400'});
     return res.end(artwork);
+  }
+  if(path==='/portal/trial' && req.method==='POST') {
+    if(!browserWrite(req)) return fail(403,'A same-site JSON request is required.');
+    const claim=trialToken(req) || createHash('sha256').update((req.headers['user-agent']||'')+'|'+(req.socket?.remoteAddress||'')).digest('hex');
+    const trial=await store.createTrial(claim);
+    if(!trial) return fail(409,'A trial key has already been issued for this browser.');
+    res.setHeader('set-cookie',trialCookie+'='+claim+cookieOptions+'; Max-Age=259200');
+    return send({key:trial.key,expires:trial.expires,endpoint:`${new URL(req.url,'http://localhost').origin}/v1`});
   }
   const token=sessionToken(req);
   const session=token && store.session(token);
