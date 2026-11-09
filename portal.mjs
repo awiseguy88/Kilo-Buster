@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { sameSecret, validLimit } from './accounts.mjs';
 
 const html = await readFile(new URL('./portal.html', import.meta.url));
@@ -63,6 +64,7 @@ export async function portal(req,res,path,store,readJson,json) {
     let uid=null;
     if(path==='/portal/admin') {
       if(!process.env.ADMIN_PASSWORD) return fail(503,'Configure ADMIN_PASSWORD in Railway first.');
+      if(process.env.ADMIN_PASSWORD.length<12 || process.env.ADMIN_PASSWORD.length>256) return fail(503,'ADMIN_PASSWORD must be 12–256 characters.');
       if(!sameSecret(password,process.env.ADMIN_PASSWORD)) return fail(401,'Invalid administrator password.');
     } else {
       if(typeof username!=='string' || !/^[a-zA-Z0-9_-]{3,32}$/.test(username)) return fail(400,'Use 3–32 letters, numbers, underscores or hyphens for your username.');
@@ -76,20 +78,55 @@ export async function portal(req,res,path,store,readJson,json) {
     res.setHeader('set-cookie',cookie+'='+store.newSession(uid)+cookieOptions+'; Max-Age=43200');
     return send({location:uid===null?'/dashboard':'/account'});
   }
-  if(path==='/portal/key' && session?.uid) return send({key:store.issue(session.uid)});
+  if(path==='/portal/usage-request') {
+    if(!session?.uid) return fail(403,'User sign-in required.');
+    const {rate,email}=data;
+    if(![2500,5000,10000,25000].includes(rate) || typeof email!=='string' || email.length>254 ||
+       !/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(email) || /\s/.test(email)) {
+      return fail(400,'Choose a listed hourly limit and enter a valid contact email.');
+    }
+    if(!process.env.RESEND_API_KEY || !process.env.USAGE_EMAIL_FROM) return fail(503,'Email delivery is not configured yet.');
+    if(limited('usage:'+session.uid,3)) return fail(429,'Please wait a minute before sending another request.');
+    const user=store.user(session.uid);
+    const stamp=new Date().toISOString().slice(0,10);
+    const id=createHash('sha256').update(JSON.stringify([user.id,email,rate,stamp])).digest('hex');
+    try {
+      const sent=await fetch('https://api.resend.com/emails',{method:'POST',signal:AbortSignal.timeout(10000),
+        headers:{'Content-Type':'application/json',Authorization:'Bearer '+process.env.RESEND_API_KEY,'Idempotency-Key':id},
+        body:JSON.stringify({from:process.env.USAGE_EMAIL_FROM,to:['aaronwise@aaronwiseai.com'],reply_to:email,
+          subject:'Kilo Buster usage request from '+user.username,
+          text:`Account: ${user.username}\nRequested limit: ${rate} requests per hour\nContact: ${email}`})});
+      if(!sent.ok || !(await sent.json()).id) throw Error('Delivery failed');
+      return send({accepted:true});
+    } catch {return fail(502,'Email delivery could not be confirmed. Please try again.');}
+  }
   if(!session?.admin) return fail(403,'Admin sign-in required.');
-  const match=path.match(/^\/portal\/users\/(\d+)\/(quota|key|revoke|enable)$/);
+  if(path==='/portal/users/create-with-key') {
+    const {username,password,quota}=data;
+    if(typeof username!=='string' || !/^[a-zA-Z0-9_-]{3,32}$/.test(username)) return fail(400,'Use 3–32 letters, numbers, underscores or hyphens for the username.');
+    if(typeof password!=='string' || password.length<10 || password.length>256) return fail(400,'Use a password between 10 and 256 characters.');
+    if(!validLimit(quota)) return fail(400,'Enter a whole number from 0 to 1,000,000.');
+    const key=await store.createWithKey(username,password,quota);
+    return key ? send({key}) : fail(409,'Username already exists. Use the existing account to add another key.');
+  }
+  const keyAction=path.match(/^\/portal\/keys\/(\d+)\/(quota|delete)$/);
+  if(keyAction) {
+    const id=Number(keyAction[1]);
+    if(!Number.isSafeInteger(id)) return fail(404,'Key not found.');
+    if(keyAction[2]==='quota' && !validLimit(data.quota)) return fail(400,'Enter a whole number from 0 to 1,000,000.');
+    const changed=keyAction[2]==='delete' ? store.deleteKey(id) : store.setKeyQuota(id,data.quota);
+    return changed ? send({}) : fail(404,'Key not found.');
+  }
+  const match=path.match(/^\/portal\/users\/(\d+)\/(key|revoke|enable)$/);
   if(!match) return fail(404,'Action not found.');
   const id=Number(match[1]);
   if(!Number.isSafeInteger(id) || !store.user(id)) return fail(404,'User not found.');
   switch(match[2]) {
-    case 'quota':
-      if(!validLimit(data.quota)) return fail(400,'Enter a whole number from 0 to 1,000,000.');
-      store.setQuota(id,data.quota); break;
     case 'revoke': store.revoke(id); break;
     case 'enable': store.enable(id); break;
     case 'key': {
-      const key=store.issue(id);
+      if(!validLimit(data.quota)) return fail(400,'Enter a whole number from 0 to 1,000,000.');
+      const key=store.issue(id,data.quota);
       return key ? send({key}) : fail(409,'Restore access before generating a key.');
     }
   }

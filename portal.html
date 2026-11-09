@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Kilo Buster Cloud</title>
+<link rel="stylesheet" href="theme.css"><script defer src="theme.js"></script>
 <style>
 :root{--portal-art:url('/portal/art.png')}
 :root{color-scheme:dark;font:16px/1.5 Inter,"Segoe UI",system-ui,sans-serif;color:#ebeff7;background:#0b0e15}
@@ -16,9 +17,25 @@ body.auth::before{background:linear-gradient(90deg,#101620 4%,#101620fa 28%,#101
 .auth main{padding-top:clamp(44px,10vh,112px)}.auth h1{font-size:clamp(32px,4vw,48px)}
 .login{max-width:370px;padding:24px;box-shadow:0 16px 44px #0005}.login input{margin-top:5px}.login button{width:100%;margin-top:6px}.login p{margin:15px 0 0}
 @media(max-width:700px){body.auth::before{position:absolute;height:clamp(165px,55vw,350px);top:58px;background:linear-gradient(0deg,#111821,transparent 37%),var(--portal-art) center/cover no-repeat}.auth main{padding:clamp(145px,49vw,305px) 18px 24px}.auth .login{max-width:none}.auth h1{margin:.3em 0}.panel{padding:16px}.actions{align-items:end}header{padding:14px 18px}}
+:root,body{background:var(--bg);color:var(--text)}
+body::before{background-image:linear-gradient(90deg,color-mix(in srgb,var(--bg) 98%,transparent),color-mix(in srgb,var(--bg) 84%,transparent)),var(--portal-art)}
+body.auth::before{background-color:var(--bg);background-image:linear-gradient(90deg,var(--bg) 4%,var(--bg) 28%,color-mix(in srgb,var(--bg) 75%,transparent) 42%,transparent 67%),var(--portal-art)}
+header,.panel{background:var(--surface);border-color:var(--border)}header strong span,p,small,label{color:var(--muted)}
+nav{margin-left:auto}button{background:var(--accent);color:#13200b}button:hover{background:var(--accent-strong)}
+button.secondary{background:var(--secondary);color:var(--text)}input{background:var(--field);color:var(--text);border-color:var(--border)}
+a,#message{color:var(--accent)}:root[data-theme="light"] a,:root[data-theme="light"] #message{color:color-mix(in srgb,var(--accent) 42%,#101720)}
+.row{border-color:var(--border)}.key-line{padding:10px;border-radius:8px;margin:8px 0;background:var(--surface-2)}.key-line strong{min-width:8em}.appearance-menu label{margin:0}.key-reveal{border:2px solid var(--accent);box-shadow:0 10px 30px color-mix(in srgb,var(--accent) 18%,transparent)}.key-reveal .secret{font-size:clamp(12px,1.5vw,15px);letter-spacing:.02em}.key-reveal p{margin-top:0}
+@media(max-width:700px){body.auth::before{background-image:linear-gradient(0deg,var(--bg),transparent 37%),var(--portal-art)}header{position:relative;z-index:1}.appearance-menu{background:var(--surface)}}
 </style></head><body><header><strong>Kilo Buster <span>Cloud</span></strong><nav id="nav"></nav></header><main>
 <h1 id="title"></h1><p id="message" role="status"></p><div id="content"></div>
-<section id="issued" class="panel" hidden><h2>New API key</h2><label>Copy this key now. It is shown once.<input class="secret" id="secret" readonly></label><button id="copy">Copy key</button></section>
+<style>dialog.panel{margin:auto;color:var(--text);width:min(420px,94vw)}dialog::backdrop{background:#060910ac}dialog select{display:block;width:100%;font:inherit;padding:8px;border-radius:7px;background:var(--field);color:var(--text);border:1px solid var(--border)}</style>
+<dialog id="upgrade" aria-labelledby="upgrade-title" class="panel"><form id="upgradeForm">
+<h2 id="upgrade-title">Need more usage?</h2><p>Send your request to aaronwise@aaronwiseai.com.</p>
+<label for="requestedRate">Requests per hour</label><select id="requestedRate"><option value="2500">2,500</option><option value="5000">5,000</option><option value="10000">10,000</option><option value="25000">25,000</option></select>
+<label>Your contact email<input id="contactEmail" type="email" autocomplete="email" maxlength="254" required></label>
+<p role="status" id="mailStatus"></p><div class="actions"><button type="submit">Send request</button><button type="button" class="secondary" id="cancelRequest">Cancel</button></div>
+</form></dialog>
+<section id="issued" class="panel key-reveal" hidden><h2>API key created</h2><p id="issuedMeta">Copy this key now. The full value is only available at creation time.</p><label>Full API key<input class="secret" id="secret" readonly></label><button id="copy">Copy key</button></section>
 </main><script>
 const $=id=>document.getElementById(id), path=location.pathname;
 if(location.protocol==='file:') document.documentElement.style.setProperty('--portal-art','url("./assets/Kilo Buster_ Breaking Network Chains.png")');
@@ -26,6 +43,13 @@ const content=$('content'), nav=$('nav');
 function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n}
 function link(parent,label,href){const n=el('a',label);n.href=href;parent.append(n)}
 function message(text){$('message').textContent=text}
+$('cancelRequest').onclick=()=>$('upgrade').close();
+$('upgradeForm').onsubmit=async e=>{
+  e.preventDefault();const submit=e.submitter;submit.disabled=true;$('mailStatus').textContent='Sending…';
+  try{await api('/portal/usage-request',{rate:Number($('requestedRate').value),email:$('contactEmail').value.trim()});
+    $('upgrade').close();message('Your usage request was submitted. We can reply to your contact email.');
+  }catch(err){$('mailStatus').textContent=err.message}finally{submit.disabled=false}
+};
 async function api(path,data){
   const r=await fetch(path,data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
   const result=await r.json(); if(!r.ok)throw Error(result.error?.message || 'Request failed.');return result;
@@ -40,7 +64,7 @@ function field(parent,name,type,autocomplete){
   if(autocomplete)input.autocomplete=autocomplete;
   label.append(input);parent.append(label);return input;
 }
-function showKey(key){$('secret').value=key;$('issued').hidden=false;$('issued').scrollIntoView({block:'nearest'});}
+function showKey(key,meta='Copy this key now. The full value is only available at creation time.'){$('secret').value=key;$('issuedMeta').textContent=meta;$('issued').hidden=false;$('issued').scrollIntoView({block:'nearest'});}
 $('copy').onclick=async()=>{try{await navigator.clipboard.writeText($('secret').value);message('Key copied.')}catch{$('secret').select();message('Press Ctrl+C or Command+C to copy.')}};
 function signOut(){button(nav,'Sign out',async()=>{await api('/portal/logout',{});location.replace('/login')},true)}
 function auth(){
@@ -68,36 +92,55 @@ async function account(){
   const u=await api('/portal/me');content.replaceChildren();$('title').textContent=u.username;
   metrics(content,[['Requests left this hour',u.remaining],['Used in last 60 min',u.used],['Hourly limit',u.quota],['Lifetime requests',u.total]]);
   const p=el('section',undefined,'panel');content.append(p);p.append(el('h2','API access'),el('code',location.origin+'/v1'),
-    el('p',u.suffix?'Active key ending in '+u.suffix:'Generate a key to connect your API client.'));
-  button(p,u.suffix?'Replace API key':'Generate API key',async()=>{
-    if(u.suffix && !confirm('Replace the current API key? Clients using it will lose access.'))return;
-    showKey((await api('/portal/key',{})).key);await account();
-  });
+    el('p',u.keys.length?'Assigned keys':'Your administrator can assign you an API key.'));
+  for(const k of u.keys)p.append(el('p','•••• '+k.suffix+' · '+k.remaining+' of '+k.quota+' requests left this hour','key-line'));
+  button(p,'Need more usage?',()=>{$('mailStatus').textContent='';$('upgrade').showModal()});
   metrics(content,[['Lifetime input tokens',u.input],['Lifetime output tokens',u.output],['Total tokens',u.input+u.output]]);
 }
 async function admins(){
   const [users,v]=await Promise.all([api('/portal/users'),api('/admin/allocation')]); content.replaceChildren();
   metrics(content,[['Available proxies',v.active],['Hourly capacity',v.capacity],['Assigned per hour',v.assigned],[v.balance<0?'Overassigned per hour':'Unassigned per hour',Math.abs(v.balance)]]);
   content.append(el('p',v.active+' available proxies × '+v.perProxy+' attempts/hour. '+v.remainingNow+' attempts remain right now. Assignments may exceed capacity.'));
-  const panel=el('section',undefined,'panel');panel.append(el('h2','User access'));content.append(panel);
+  const create=el('form',undefined,'panel'), fields=el('div',undefined,'actions');
+  create.append(el('h2','Create account and key'),fields);content.append(create);
+  const username=field(fields,'New username','text','off'), password=field(fields,'User password','password','new-password');
+  username.pattern='[A-Za-z0-9_\\-]{3,32}';password.minLength=10;password.maxLength=256;
+  const quota=limitInput(fields,'Hourly request limit',v.defaultLimit), submit=el('button','Create account and key');
+  fields.append(submit);
+  create.onsubmit=async event=>{event.preventDefault();submit.disabled=true;
+    try{const result=await api('/portal/users/create-with-key',{username:username.value,password:password.value,quota:quota.valueAsNumber});
+      const name=username.value;create.reset();await admins();showKey(result.key,'Account '+name+' created. Copy this full key now and store it securely; it cannot be recovered later.');message('Account and key created for '+name+'.');
+    }catch(e){message(e.message)}finally{submit.disabled=false}
+  };
+  const panel=el('section',undefined,'panel');panel.append(el('h2','API key management'));content.append(panel);
   if(!users.length)panel.append(el('p','Registered users will appear here.'));
   for(const u of users){
     const row=el('div',undefined,'row'),actions=el('div',undefined,'actions');panel.append(row);
     row.append(el('strong',u.username+(u.disabled?' · Revoked':'')),el('p',u.used+' used this hour · '+u.remaining+' left · '+u.total+' lifetime requests'),actions);
     const base='/portal/users/'+u.id+'/';
-    const limit=field(actions,'Requests per hour','number');limit.min=0;limit.max=1000000;limit.value=u.quota;
-    button(actions,'Save limit',async()=>{if(!limit.reportValidity())return;await api(base+'quota',{quota:limit.valueAsNumber});await admins();message('Limit saved for '+u.username+'.')});
-    if(!u.disabled)button(actions,u.suffix?'Replace key':'Generate key',async()=>{
-      if(u.suffix&&!confirm('Replace the key for '+u.username+'?'))return;
-      showKey((await api(base+'key',{})).key);await admins();
-    },true);
+    if(!u.disabled){
+      const limit=limitInput(actions,'New key limit / hour',v.defaultLimit);
+      button(actions,'Create key',async()=>{if(!limit.reportValidity())return;
+        const result=await api(base+'key',{quota:limit.valueAsNumber});await admins();showKey(result.key,'A new key for '+u.username+' was created. Copy this full key now and store it securely; it cannot be recovered later.');
+      });
+    }
+    for(const k of u.keys){
+      const line=el('div',undefined,'actions key-line');row.append(line);
+      line.append(el('strong','•••• '+k.suffix),el('small',k.used+' used · '+k.remaining+' left'));
+      const limit=limitInput(line,'Hourly limit',k.quota), endpoint='/portal/keys/'+k.id+'/';
+      button(line,'Save limit',async()=>{if(!limit.reportValidity())return;await api(endpoint+'quota',{quota:limit.valueAsNumber});await admins();message('Limit saved.')},true);
+      button(line,'Delete key',async()=>{if(!confirm('Delete the key ending in '+k.suffix+' for '+u.username+'?'))return;
+        await api(endpoint+'delete',{});$('issued').hidden=true;$('secret').value='';await admins();message('Key deleted.');
+      },true);
+    }
     button(actions,u.disabled?'Restore access':'Revoke access',async()=>{
       if(!u.disabled&&!confirm('Revoke all access for '+u.username+'?'))return;
       await api(base+(u.disabled?'enable':'revoke'),{});$('issued').hidden=true;$('secret').value='';await admins();
     },true);
   }
 }
-if(path==='/account'){signOut();account().catch(e=>message(e.message));setInterval(()=>{if(!document.hidden)account().catch(e=>message(e.message))},15000)}
+function limitInput(parent,label,value){const input=field(parent,label,'number');input.min=0;input.max=1000000;input.value=value;return input}
+if(path==='/account'){signOut();account().catch(e=>message(e.message));setInterval(()=>{if(!document.hidden&&!$('upgrade').open)account().catch(e=>message(e.message))},15000)}
 else if(path==='/admin/users'){$('title').textContent='Accounts and allocation';link(nav,'Proxy dashboard','/dashboard');signOut();admins().catch(e=>message(e.message));button(nav,'Refresh',admins,true)}
 else auth();
 </script></body></html>

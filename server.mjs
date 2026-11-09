@@ -166,6 +166,11 @@ async function handler(req, res) {
   res.setHeader('cache-control','no-store');
   res.setHeader('referrer-policy','no-referrer');
   res.setHeader('x-frame-options','DENY');
+  if(req.method==='GET' && /^\/(?:admin\/)?theme\.(css|js)$/.test(path)){
+    const file=path.split('/').pop();
+    res.writeHead(200,{'content-type':file.endsWith('.css')?'text/css':'text/javascript'});
+    return res.end(await readFile(join(ROOT,file)));
+  }
   if (['/','/admin','/account','/admin/users','/login','/register'].includes(path) || path.startsWith('/portal/')) {
     return portal(req,res,path,store,readJson,json);
   }
@@ -180,9 +185,9 @@ async function handler(req, res) {
     if(path==='/admin/allocation' && req.method==='GET') {
       const active=proxies.filter(p=>available(p));
       const capacity=active.length*MAX_PER_HOUR;
-      const assigned=tokenDb.prepare('SELECT COALESCE(SUM(quota),0) AS n FROM users WHERE disabled=0').get().n;
+      const assigned=store.assigned();
       return json(res,200,{active:active.length,perProxy:MAX_PER_HOUR,capacity,assigned,
-        balance:capacity-assigned,remainingNow:active.reduce((n,p)=>n+MAX_PER_HOUR-p.requests.length,0)});
+        balance:capacity-assigned,defaultLimit:store.defaultLimit,remainingNow:active.reduce((n,p)=>n+MAX_PER_HOUR-p.requests.length,0)});
     }
   } else {
     cors(res);
@@ -204,7 +209,7 @@ async function handler(req, res) {
   if (!proxies.some(p=>available(p))) return json(res,429,{error:{message:'No proxy capacity available.',type:'rate_limit_error'}});
   const admission=store.reserve(key);
   if(admission!==200) return json(res,admission,{error:admission===429
-    ? {message:'Your rolling hourly request limit has been reached.',type:'rate_limit_error'}
+    ? {message:'This API key has reached its rolling hourly request limit.',type:'rate_limit_error'}
     : {message:'Invalid or revoked API key.',type:'authentication_error'}});
   let last; const attempts = Math.min(proxies.length, Number(process.env.PROXY_RETRIES || 3));
   for (let i=0; i<attempts; i++) { const proxy = pickProxy(); if (!proxy) return json(res, 429, { error: { message: 'All proxies are at their hourly quota or cooling down.', type: 'rate_limit_error' } }); const controller = new AbortController();
