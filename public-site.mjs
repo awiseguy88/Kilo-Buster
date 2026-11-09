@@ -19,7 +19,7 @@ export function publicPage(path) {
     <img src="/portal/cover.jpg" alt="Kilo Buster artwork" width="1200" height="675"></section>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <title>${pricing?'Monthly API plans':'An API endpoint for your AI tools'} | Kilo Buster Cloud</title>
-    <meta name="description" content="Choose a monthly API plan, receive your personal API key by email and connect your AI tools.">
+    <meta name="description" content="Choose a monthly API plan, receive your personal API key by email and connect your AI tools."><link rel="icon" href="/favicon.ico">
     <link rel="stylesheet" href="/theme.css"><link rel="stylesheet" href="/cloud.css"><script defer src="/theme.js"></script></head>
     <body class="public"><header><a class="brand" href="/">Kilo Buster <span>Cloud</span></a>
     <nav aria-label="Main"><a href="/pricing">Pricing</a><a href="/setup">Setup guide</a><a href="/login">Sign in</a><a href="/register">Create account</a></nav></header>
