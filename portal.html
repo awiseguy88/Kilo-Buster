@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kilo Buster Cloud</title>
+<style>
+:root{--portal-art:url('/portal/art.png')}
+:root{color-scheme:dark;font:16px/1.5 Inter,"Segoe UI",system-ui,sans-serif;color:#ebeff7;background:#0b0e15}
+*{box-sizing:border-box}body{margin:0}main,header{max-width:1000px;margin:auto;padding:24px}header{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #303a48;gap:12px;flex-wrap:wrap}header strong{font-size:20px}nav,.actions,.metrics{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
+a{color:#b9f477}h1{letter-spacing:-.04em;margin:.4em 0;font-size:clamp(28px,5vw,44px)}h2{font-size:19px;margin:0 0 12px}p,small,label{color:#b9c5d5}.panel{margin:16px 0;background:#151c27;border:1px solid #303a48;border-radius:14px;padding:20px}.login{max-width:420px}.metrics{align-items:stretch}.metric{flex:1 1 140px}.metric strong{display:block;font-size:24px}input,button{font:inherit;border-radius:7px;padding:8px 12px}input{width:100%;background:#0b111a;color:inherit;border:1px solid #536070}label{display:block;margin-bottom:12px}button{border:0;background:#b9f477;color:#142005;font-weight:650;cursor:pointer}button:disabled{opacity:.5}button.secondary{background:#293647;color:#eaf1fa}code{overflow-wrap:anywhere}#message{color:#ffe3a4}.row{border-top:1px solid #364252;padding:14px 0}.row input{width:7em}.row label{margin:0}.secret{font-family:monospace}a:focus-visible,button:focus-visible,input:focus-visible{outline:3px solid #83bbff}
+body{min-height:100svh;background:#111821;isolation:isolate}
+body::before{content:"";position:fixed;inset:0;z-index:-1;background:linear-gradient(90deg,#0b1119f5,#101925d6 54%,#111a2570),var(--portal-art) center/cover no-repeat}
+header{max-width:none;padding:14px max(24px,calc((100vw - 1120px)/2));background:#101620ed;border-color:#8995aa3b}
+header strong{letter-spacing:-.035em}header strong span{font-weight:450;color:#afc7d4}
+main{max-width:1168px}.panel{background:#111a25f7;border-color:#566376;border-radius:12px}
+a{color:#ffbf8c}button{background:#ffc08b;color:#28180b}button:hover{filter:brightness(1.08)}
+body.auth::before{background:linear-gradient(90deg,#101620 4%,#101620fa 28%,#101620bc 42%,transparent 67%),var(--portal-art) right center/min(81vw,1750px) auto no-repeat,#101620}
+.auth main{padding-top:clamp(44px,10vh,112px)}.auth h1{font-size:clamp(32px,4vw,48px)}
+.login{max-width:370px;padding:24px;box-shadow:0 16px 44px #0005}.login input{margin-top:5px}.login button{width:100%;margin-top:6px}.login p{margin:15px 0 0}
+@media(max-width:700px){body.auth::before{position:absolute;height:clamp(165px,55vw,350px);top:58px;background:linear-gradient(0deg,#111821,transparent 37%),var(--portal-art) center/cover no-repeat}.auth main{padding:clamp(145px,49vw,305px) 18px 24px}.auth .login{max-width:none}.auth h1{margin:.3em 0}.panel{padding:16px}.actions{align-items:end}header{padding:14px 18px}}
+</style></head><body><header><strong>Kilo Buster <span>Cloud</span></strong><nav id="nav"></nav></header><main>
+<h1 id="title"></h1><p id="message" role="status"></p><div id="content"></div>
+<section id="issued" class="panel" hidden><h2>New API key</h2><label>Copy this key now. It is shown once.<input class="secret" id="secret" readonly></label><button id="copy">Copy key</button></section>
+</main><script>
+const $=id=>document.getElementById(id), path=location.pathname;
+if(location.protocol==='file:') document.documentElement.style.setProperty('--portal-art','url("./assets/Kilo Buster_ Breaking Network Chains.png")');
+const content=$('content'), nav=$('nav');
+function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n}
+function link(parent,label,href){const n=el('a',label);n.href=href;parent.append(n)}
+function message(text){$('message').textContent=text}
+async function api(path,data){
+  const r=await fetch(path,data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+  const result=await r.json(); if(!r.ok)throw Error(result.error?.message || 'Request failed.');return result;
+}
+function button(parent,label,work,secondary=false){
+  const b=el('button',label,secondary?'secondary':'');b.type='button';
+  b.onclick=async()=>{b.disabled=true;message('');try{await work()}catch(e){message(e.message)}finally{b.disabled=false}};
+  parent.append(b);return b;
+}
+function field(parent,name,type,autocomplete){
+  const label=el('label',name), input=el('input');input.type=type;input.required=true;
+  if(autocomplete)input.autocomplete=autocomplete;
+  label.append(input);parent.append(label);return input;
+}
+function showKey(key){$('secret').value=key;$('issued').hidden=false;$('issued').scrollIntoView({block:'nearest'});}
+$('copy').onclick=async()=>{try{await navigator.clipboard.writeText($('secret').value);message('Key copied.')}catch{$('secret').select();message('Press Ctrl+C or Command+C to copy.')}};
+function signOut(){button(nav,'Sign out',async()=>{await api('/portal/logout',{});location.replace('/login')},true)}
+function auth(){
+  document.body.classList.add('auth');
+  const admin=path==='/admin', register=path==='/register';
+  $('title').textContent=admin?'Administrator sign-in':register?'Create an account':'Sign in';
+  link(nav,admin?'User sign-in':'Administrator',admin?'/login':'/admin');
+  const form=el('form',undefined,'panel login');content.append(form);
+  const user=admin?null:field(form,'Username','text','username');
+  if(user){user.pattern='[a-zA-Z0-9_-]{3,32}';user.title='3–32 letters, numbers, underscores or hyphens';}
+  const pass=field(form,register?'Password (at least 10 characters)':'Password','password',register?'new-password':'current-password');
+  if(register)pass.minLength=10;
+  const submit=el('button',register?'Create account':'Sign in');form.append(submit);
+  if(!admin){const p=el('p');link(p,register?'Already registered? Sign in':'Create an account','/'+(register?'login':'register'));form.append(p)}
+  form.onsubmit=async e=>{e.preventDefault();submit.disabled=true;try{
+    const r=await api('/portal/'+(admin?'admin':register?'register':'login'),{username:user?.value,password:pass.value});
+    location.replace(r.location);
+  }catch(err){message(err.message)}finally{submit.disabled=false}};
+}
+function metrics(parent,values){
+  const block=el('div',undefined,'metrics');parent.append(block);
+  for(const [label,value] of values){const card=el('div',undefined,'metric panel');card.append(el('small',label),el('strong',Number(value).toLocaleString()));block.append(card)}
+}
+async function account(){
+  const u=await api('/portal/me');content.replaceChildren();$('title').textContent=u.username;
+  metrics(content,[['Requests left this hour',u.remaining],['Used in last 60 min',u.used],['Hourly limit',u.quota],['Lifetime requests',u.total]]);
+  const p=el('section',undefined,'panel');content.append(p);p.append(el('h2','API access'),el('code',location.origin+'/v1'),
+    el('p',u.suffix?'Active key ending in '+u.suffix:'Generate a key to connect your API client.'));
+  button(p,u.suffix?'Replace API key':'Generate API key',async()=>{
+    if(u.suffix && !confirm('Replace the current API key? Clients using it will lose access.'))return;
+    showKey((await api('/portal/key',{})).key);await account();
+  });
+  metrics(content,[['Lifetime input tokens',u.input],['Lifetime output tokens',u.output],['Total tokens',u.input+u.output]]);
+}
+async function admins(){
+  const [users,v]=await Promise.all([api('/portal/users'),api('/admin/allocation')]); content.replaceChildren();
+  metrics(content,[['Available proxies',v.active],['Hourly capacity',v.capacity],['Assigned per hour',v.assigned],[v.balance<0?'Overassigned per hour':'Unassigned per hour',Math.abs(v.balance)]]);
+  content.append(el('p',v.active+' available proxies × '+v.perProxy+' attempts/hour. '+v.remainingNow+' attempts remain right now. Assignments may exceed capacity.'));
+  const panel=el('section',undefined,'panel');panel.append(el('h2','User access'));content.append(panel);
+  if(!users.length)panel.append(el('p','Registered users will appear here.'));
+  for(const u of users){
+    const row=el('div',undefined,'row'),actions=el('div',undefined,'actions');panel.append(row);
+    row.append(el('strong',u.username+(u.disabled?' · Revoked':'')),el('p',u.used+' used this hour · '+u.remaining+' left · '+u.total+' lifetime requests'),actions);
+    const base='/portal/users/'+u.id+'/';
+    const limit=field(actions,'Requests per hour','number');limit.min=0;limit.max=1000000;limit.value=u.quota;
+    button(actions,'Save limit',async()=>{if(!limit.reportValidity())return;await api(base+'quota',{quota:limit.valueAsNumber});await admins();message('Limit saved for '+u.username+'.')});
+    if(!u.disabled)button(actions,u.suffix?'Replace key':'Generate key',async()=>{
+      if(u.suffix&&!confirm('Replace the key for '+u.username+'?'))return;
+      showKey((await api(base+'key',{})).key);await admins();
+    },true);
+    button(actions,u.disabled?'Restore access':'Revoke access',async()=>{
+      if(!u.disabled&&!confirm('Revoke all access for '+u.username+'?'))return;
+      await api(base+(u.disabled?'enable':'revoke'),{});$('issued').hidden=true;$('secret').value='';await admins();
+    },true);
+  }
+}
+if(path==='/account'){signOut();account().catch(e=>message(e.message));setInterval(()=>{if(!document.hidden)account().catch(e=>message(e.message))},15000)}
+else if(path==='/admin/users'){$('title').textContent='Accounts and allocation';link(nav,'Proxy dashboard','/dashboard');signOut();admins().catch(e=>message(e.message));button(nav,'Refresh',admins,true)}
+else auth();
+</script></body></html>

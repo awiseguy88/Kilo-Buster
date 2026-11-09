@@ -4,13 +4,13 @@ import { readFile, writeFile, rename } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ProxyAgent } from 'undici';
-import { getApiKey } from './api-key.mjs';
+import { accounts } from './accounts.mjs';
+import { browserWrite, portal, sessionToken } from './portal.mjs';
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.PORT || 43817), HOST = process.env.HOST || '127.0.0.1';
+const PORT = Number(process.env.PORT || 43817), HOST = process.env.HOST || '0.0.0.0';
 const MODEL = 'kilo-auto/free', UPSTREAM = 'https://ai-gateway.kilo.ai/api/v1/chat/completions';
-const AUTH_TOKEN = await getApiKey();
 const KILO_API_KEY = process.env.KILO_API_KEY || '';
-const STATE_FILE = process.env.PROXY_STATE_FILE || join(ROOT, 'proxy-health-state.json');
+const STATE_FILE = process.env.PROXY_STATE_FILE || join(process.env.RAILWAY_VOLUME_MOUNT_PATH || ROOT, 'proxy-health-state.json');
 const PROXY_SOURCE = 'https://aaronwiseai.com/aidocs/prox.txt';
 let importing = false;
 let proxies = [], saveTimer = null;
@@ -22,6 +22,7 @@ if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1) throw Error('PR
 const MAX_PER_HOUR = Math.min(149, requestedLimit);
 const BACKOFF_BASE = Number(process.env.PROXY_BACKOFF_SECONDS || 5) * 1000;
 const tokenDb = new DatabaseSync(STATE_FILE + '.tokens.sqlite');
+const store = accounts(tokenDb,Number(process.env.DEFAULT_REQUESTS_PER_HOUR ?? 30));
 tokenDb.exec('CREATE TABLE IF NOT EXISTS totals (id INTEGER PRIMARY KEY, input INTEGER NOT NULL, output INTEGER NOT NULL); INSERT OR IGNORE INTO totals VALUES (1,0,0)');
 const addUsage = tokenDb.prepare('UPDATE totals SET input=input+?, output=output+? WHERE id=1');
 const getUsage = tokenDb.prepare('SELECT input, output FROM totals WHERE id=1');
@@ -47,7 +48,7 @@ function reserveAttempt(proxy, now) {
   }
 }
 
-async function forwardBody(upstream, res) {
+async function forwardBody(upstream, res, uid) {
   let pending = '', usage;
   const decoder = new TextDecoder();
   const stream = upstream.headers.get('content-type')?.includes('text/event-stream');
@@ -75,7 +76,7 @@ async function forwardBody(upstream, res) {
   pending += decoder.decode();
   if (stream) { pending += '\n'; parseLines(); } else inspect(pending);
   if (usage) {
-    try { addUsage.run(usage.prompt_tokens, usage.completion_tokens); }
+    try { addUsage.run(usage.prompt_tokens, usage.completion_tokens); store.recordTokens(uid,usage.prompt_tokens,usage.completion_tokens); }
     catch (error) { console.error('[tokens] unable to persist usage:', error.message); }
   }
 }
@@ -150,13 +151,46 @@ function pickProxy() {
 function markSuccess(proxy) { proxy.successes++; proxy.consecutiveFailures = 0; proxy.backoffUntil = 0; proxy.lastError = ''; scheduleSave(); }
 function markFailure(proxy, error) { proxy.failures++; proxy.consecutiveFailures++; proxy.backoffUntil = Date.now() + Math.min(15 * 60 * 1000, BACKOFF_BASE * 2 ** Math.min(proxy.consecutiveFailures - 1, 8)); proxy.lastError = String(error?.message || error).slice(0, 240); scheduleSave(); }
 function cors(res) { res.setHeader('access-control-allow-origin','*'); res.setHeader('access-control-allow-methods','GET, POST, OPTIONS'); res.setHeader('access-control-allow-headers','Content-Type, Authorization'); }
-function json(res, status, data) { cors(res); res.writeHead(status, {'content-type':'application/json'}); res.end(JSON.stringify(data)); }
-async function readJson(req) { let s=''; for await (const c of req) s += c; return JSON.parse(s); }
+function json(res, status, data) { res.writeHead(status, {'content-type':'application/json'}); res.end(JSON.stringify(data)); }
+async function readJson(req,limit=4*1024*1024) {
+  const chunks=[]; let size=0;
+  for await (const chunk of req) {
+    const buf=Buffer.from(chunk); size+=buf.length;
+    if(size>limit) throw Error('Body too large');
+    chunks.push(buf);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString());
+}
 async function handler(req, res) {
-  cors(res); if (req.method === 'OPTIONS') return res.writeHead(204).end();
   const requestUrl = new URL(req.url,'http://localhost'), path = requestUrl.pathname;
-  const suppliedToken = req.headers.authorization?.replace(/^Bearer\s+/i, '') || requestUrl.searchParams.get('token') || '';
-  if (AUTH_TOKEN && suppliedToken !== AUTH_TOKEN) return json(res,401,{error:{message:'Invalid API key.',type:'authentication_error'}});
+  res.setHeader('cache-control','no-store');
+  res.setHeader('referrer-policy','no-referrer');
+  res.setHeader('x-frame-options','DENY');
+  if (['/','/admin','/account','/admin/users','/login','/register'].includes(path) || path.startsWith('/portal/')) {
+    return portal(req,res,path,store,readJson,json);
+  }
+  const adminRoute=['/dashboard','/api/proxies/import','/health/stats','/admin/allocation'].includes(path);
+  let key,user;
+  if(adminRoute) {
+    if(!store.session(sessionToken(req))?.admin) {
+      if(path==='/dashboard') return res.writeHead(303,{location:'/admin'}).end();
+      return json(res,403,{error:{message:'Admin sign-in required.'}});
+    }
+    if(req.method==='POST' && !browserWrite(req)) return json(res,403,{error:{message:'Same-site JSON required.'}});
+    if(path==='/admin/allocation' && req.method==='GET') {
+      const active=proxies.filter(p=>available(p));
+      const capacity=active.length*MAX_PER_HOUR;
+      const assigned=tokenDb.prepare('SELECT COALESCE(SUM(quota),0) AS n FROM users WHERE disabled=0').get().n;
+      return json(res,200,{active:active.length,perProxy:MAX_PER_HOUR,capacity,assigned,
+        balance:capacity-assigned,remainingNow:active.reduce((n,p)=>n+MAX_PER_HOUR-p.requests.length,0)});
+    }
+  } else {
+    cors(res);
+    if(req.method==='OPTIONS') return res.writeHead(204).end();
+    key=/^Bearer (kb_[\w-]+)$/i.exec(req.headers.authorization || '')?.[1] || '';
+    user=store.byKey(key);
+    if(!user) return json(res,401,{error:{message:'Invalid or revoked API key.',type:'authentication_error'}});
+  }
   if (path === '/dashboard' && req.method === 'GET') { res.writeHead(200, {'content-type':'text/html; charset=utf-8'}); return res.end(await readFile(join(ROOT, 'dashboard.html'), 'utf8')); }
   if (path === '/api/proxies/import' && req.method === 'POST') { try { return json(res, 200, await importProxies()); } catch (error) { return json(res, 502, { error: { message: error.message } }); } }
   if (path === '/health/stats' && req.method === 'GET') { const stats = proxies.map(proxyStats).sort((a,b) => (a.latencyMs ?? Infinity) - (b.latencyMs ?? Infinity)); return json(res, 200, { tokens: getUsage.get(), total: stats.length, available: stats.filter(p => p.backoffSeconds === 0 && p.remaining > 0).length, quota: MAX_PER_HOUR, proxies: stats }); }
@@ -167,11 +201,16 @@ async function handler(req, res) {
   if (!body || !Array.isArray(body.messages)) return json(res,400,{error:{message:'messages must be an array.'}}); body.model = MODEL;
   if (body.stream === true && body.stream_options === undefined) body.stream_options = { include_usage: true };
   if (!proxies.length) return json(res, 503, { error: { message: 'No proxies loaded. Open the dashboard and click Load proxies.', type: 'api_connection_error' } });
+  if (!proxies.some(p=>available(p))) return json(res,429,{error:{message:'No proxy capacity available.',type:'rate_limit_error'}});
+  const admission=store.reserve(key);
+  if(admission!==200) return json(res,admission,{error:admission===429
+    ? {message:'Your rolling hourly request limit has been reached.',type:'rate_limit_error'}
+    : {message:'Invalid or revoked API key.',type:'authentication_error'}});
   let last; const attempts = Math.min(proxies.length, Number(process.env.PROXY_RETRIES || 3));
   for (let i=0; i<attempts; i++) { const proxy = pickProxy(); if (!proxy) return json(res, 429, { error: { message: 'All proxies are at their hourly quota or cooling down.', type: 'rate_limit_error' } }); const controller = new AbortController();
     const cancel = () => controller.abort();
     res.once("close", cancel);
-    try { if (res.destroyed) return; const headers = {'content-type':'application/json',accept:req.headers.accept || 'application/json','x-kilocode-mode':req.headers['x-kilocode-mode'] || 'coding'}; if (KILO_API_KEY) headers.authorization = `Bearer ${KILO_API_KEY}`; const started = performance.now(); const upstream = await fetch(UPSTREAM,{method:'POST',signal:controller.signal,headers,body:JSON.stringify(body),dispatcher:agents.get(proxy.url.href)}); if (upstream.ok) { const ms = Math.max(1, performance.now() - started); proxy.latencyMs = Math.round(proxy.latencyMs ? 0.7 * proxy.latencyMs + 0.3 * ms : ms); } console.log(`[request] proxy=${proxy.id} status=${upstream.status} tools=${Array.isArray(body.tools) ? body.tools.length : 0} stream=${Boolean(body.stream)}`); if (upstream.status >= 500) { markFailure(proxy, `Kilo returned HTTP ${upstream.status}`); await upstream.body?.cancel(); last = new Error(`Kilo returned HTTP ${upstream.status}`); continue; } markSuccess(proxy); res.writeHead(upstream.status,Object.fromEntries(upstream.headers)); if (upstream.body) await forwardBody(upstream, res); return res.end(); } catch (e) { if (controller.signal.aborted) return; markFailure(proxy, e); if (res.headersSent) return res.destroy(); last=e;
+    try { if (res.destroyed) return; const headers = {'content-type':'application/json',accept:req.headers.accept || 'application/json','x-kilocode-mode':req.headers['x-kilocode-mode'] || 'coding'}; if (KILO_API_KEY) headers.authorization = `Bearer ${KILO_API_KEY}`; const started = performance.now(); const upstream = await fetch(UPSTREAM,{method:'POST',signal:controller.signal,headers,body:JSON.stringify(body),dispatcher:agents.get(proxy.url.href)}); if (upstream.ok) { const ms = Math.max(1, performance.now() - started); proxy.latencyMs = Math.round(proxy.latencyMs ? 0.7 * proxy.latencyMs + 0.3 * ms : ms); } console.log(`[request] proxy=${proxy.id} status=${upstream.status} tools=${Array.isArray(body.tools) ? body.tools.length : 0} stream=${Boolean(body.stream)}`); if (upstream.status >= 500) { markFailure(proxy, `Kilo returned HTTP ${upstream.status}`); await upstream.body?.cancel(); last = new Error(`Kilo returned HTTP ${upstream.status}`); continue; } markSuccess(proxy); res.writeHead(upstream.status,Object.fromEntries(upstream.headers)); if (upstream.body) await forwardBody(upstream, res, user.id); return res.end(); } catch (e) { if (controller.signal.aborted) return; markFailure(proxy, e); if (res.headersSent) return res.destroy(); last=e;
     } finally {
       res.off("close", cancel);
       proxy.active--;
@@ -179,6 +218,9 @@ async function handler(req, res) {
   }
   return json(res,502,{error:{message:`All proxy attempts failed: ${last?.message || 'unknown error'}`,type:'api_connection_error'}});
 }
-if (process.env.KILO_BUSTER_TEST !== '1') http.createServer((req,res)=>handler(req,res).catch(e=>json(res,500,{error:{message:e.message}}))).listen(PORT,HOST,()=>{ console.log(`API listening on http://${HOST}:${PORT}`); console.log(`API key: ${AUTH_TOKEN}`); console.log(`Dashboard: http://127.0.0.1:${PORT}/dashboard?token=${encodeURIComponent(AUTH_TOKEN)}`); });
+if (process.env.KILO_BUSTER_TEST !== '1') http.createServer((req,res)=>handler(req,res).catch(()=> {
+  if(res.headersSent) return res.destroy();
+  json(res,500,{error:{message:'Internal server error.'}});
+})).listen(PORT,HOST,()=>console.log(`API listening on ${HOST}:${PORT}`));
 export { handler, tokenDb }; 
 
