@@ -112,7 +112,7 @@ export function accounts(db, defaultLimit) {
         query('DELETE FROM trial_claims WHERE expires<=?').run(now);
         if(query('SELECT 1 FROM trial_claims WHERE claim_hash=?').get(claimHash)) { db.exec('ROLLBACK'); return null; }
         const username='trial_'+randomBytes(10).toString('hex');
-        const password=secret(), user=insertUser.run(username,await passwordHash(password));
+        const password=secret(), user=insertUser.run(username,await passwordHash(password),defaultLimit);
         const key='kb_'+secret();
         const result=query('INSERT INTO api_keys(uid,hash,suffix,quota,secret,expires) VALUES(?,?,?,?,?,?)').run(user.lastInsertRowid,digest(key),key.slice(-6),750,protect(key),expires);
         query('UPDATE users SET trial_until=? WHERE id=?').run(expires,user.lastInsertRowid);
