@@ -122,7 +122,7 @@ export function accounts(db, defaultLimit) {
     },
     assigned() { return query('SELECT COALESCE(SUM(k.quota),0) AS n FROM api_keys k JOIN users u ON u.id=k.uid WHERE u.disabled=0').get().n; },
     setKeyQuota(id,n) { return query('UPDATE api_keys SET quota=? WHERE id=?').run(n,id).changes; },
-    setUserQuota(id,n) { return query('UPDATE api_keys SET quota=? WHERE uid=?').run(n,id).changes; },
+    setUserQuota(id,n) { const changed=query('UPDATE api_keys SET quota=? WHERE uid=?').run(n,id).changes; return changed || (issue(id,n)?1:0); },
     deleteKey(id) { return query('DELETE FROM api_keys WHERE id=?').run(id).changes; },
     revoke(id) {
       db.exec('BEGIN IMMEDIATE');
