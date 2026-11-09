@@ -23,7 +23,7 @@ export function accounts(db, defaultLimit) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-      password TEXT NOT NULL, quota INTEGER NOT NULL, disabled INTEGER NOT NULL DEFAULT 0,
+      password TEXT NOT NULL, quota INTEGER NOT NULL, disabled INTEGER NOT NULL DEFAULT 0, trial_until INTEGER,
       key_hash TEXT UNIQUE, suffix TEXT, total INTEGER NOT NULL DEFAULT 0,
       input INTEGER NOT NULL DEFAULT 0, output INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS sessions (hash TEXT PRIMARY KEY, uid INTEGER, admin_tag TEXT, expires INTEGER NOT NULL);
@@ -39,6 +39,9 @@ export function accounts(db, defaultLimit) {
       hash TEXT NOT NULL UNIQUE, suffix TEXT NOT NULL, quota INTEGER NOT NULL CHECK(quota>=0), secret TEXT);
       CREATE INDEX IF NOT EXISTS keys_owner ON api_keys(uid);`);
     if (!query("SELECT 1 FROM pragma_table_info('api_keys') WHERE name='secret'").get()) db.exec('ALTER TABLE api_keys ADD COLUMN secret TEXT');
+    if (!query("SELECT 1 FROM pragma_table_info('users') WHERE name='trial_until'").get()) db.exec('ALTER TABLE users ADD COLUMN trial_until INTEGER');
+    if (!query("SELECT 1 FROM pragma_table_info('api_keys') WHERE name='expires'").get()) db.exec('ALTER TABLE api_keys ADD COLUMN expires INTEGER');
+    db.exec('CREATE TABLE IF NOT EXISTS trial_claims (claim_hash TEXT PRIMARY KEY, key_id INTEGER NOT NULL, expires INTEGER NOT NULL)');
     if (!query("SELECT 1 FROM pragma_table_info('requests') WHERE name='key_id'").get()) {
       db.exec(`ALTER TABLE requests ADD COLUMN key_id INTEGER;
         INSERT INTO api_keys(uid,hash,suffix,quota) SELECT id,key_hash,suffix,quota FROM users WHERE key_hash IS NOT NULL AND disabled=0;
@@ -47,7 +50,7 @@ export function accounts(db, defaultLimit) {
     }
     db.exec('CREATE INDEX IF NOT EXISTS key_window ON requests(key_id,at); COMMIT');
   } catch(e) { db.exec('ROLLBACK'); throw e; }
-  const lookup = query('SELECT u.id,k.id AS key_id,k.quota FROM api_keys k JOIN users u ON u.id=k.uid WHERE k.hash=? AND u.disabled=0');
+  const lookup = query('SELECT u.id,k.id AS key_id,k.quota FROM api_keys k JOIN users u ON u.id=k.uid WHERE k.hash=? AND u.disabled=0 AND (k.expires IS NULL OR k.expires>?)');
   const view = `SELECT id,username,disabled,total,input,output,
     (SELECT count(*) FROM requests r WHERE r.uid=u.id AND r.at>?) AS used FROM users u`;
   const keyRows=query(`SELECT k.id,k.suffix,k.quota,count(r.at) AS used FROM api_keys k
@@ -64,7 +67,7 @@ export function accounts(db, defaultLimit) {
   const insertUser=query('INSERT INTO users(username,password,quota) VALUES(?,?,?) ON CONFLICT(username) DO NOTHING');
   function issue(id,quota) {
     const key='kb_'+secret();
-    return query('INSERT INTO api_keys(uid,hash,suffix,quota,secret) SELECT id,?,?,?,? FROM users WHERE id=? AND disabled=0')
+    return query('INSERT INTO api_keys(uid,hash,suffix,quota,secret,expires) SELECT id,?,?,?, ?,NULL FROM users WHERE id=? AND disabled=0')
       .run(digest(key),key.slice(-6),quota,protect(key),id).changes ? key : null;
   }
   return {
@@ -102,8 +105,24 @@ export function accounts(db, defaultLimit) {
     user(id) { const row=query(view+' WHERE id=?').get(Date.now()-hour,id); if(!row) return null; const result=summary(row); result.keys=result.keys.map(k=>({...k,key:reveal(query('SELECT secret FROM api_keys WHERE id=?').get(k.id)?.secret)})); return result; },
     list() { return query(view+' ORDER BY username').all(Date.now()-hour).map(summary); },
     defaultLimit,
+    async createTrial(claim) {
+      const claimHash=digest(claim), now=Date.now(), expires=now+3*24*hour;
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        query('DELETE FROM trial_claims WHERE expires<=?').run(now);
+        if(query('SELECT 1 FROM trial_claims WHERE claim_hash=?').get(claimHash)) { db.exec('ROLLBACK'); return null; }
+        const username='trial_'+randomBytes(10).toString('hex');
+        const password=secret(), user=insertUser.run(username,await passwordHash(password));
+        const key='kb_'+secret();
+        const result=query('INSERT INTO api_keys(uid,hash,suffix,quota,secret,expires) VALUES(?,?,?,?,?,?)').run(user.lastInsertRowid,digest(key),key.slice(-6),750,protect(key),expires);
+        query('UPDATE users SET trial_until=? WHERE id=?').run(expires,user.lastInsertRowid);
+        query('INSERT INTO trial_claims VALUES(?,?,?)').run(claimHash,result.lastInsertRowid,expires);
+        db.exec('COMMIT'); return {key,expires};
+      } catch(e) { db.exec('ROLLBACK'); throw e; }
+    },
     assigned() { return query('SELECT COALESCE(SUM(k.quota),0) AS n FROM api_keys k JOIN users u ON u.id=k.uid WHERE u.disabled=0').get().n; },
     setKeyQuota(id,n) { return query('UPDATE api_keys SET quota=? WHERE id=?').run(n,id).changes; },
+    setUserQuota(id,n) { const changed=query('UPDATE api_keys SET quota=? WHERE uid=?').run(n,id).changes; return changed || (issue(id,n)?1:0); },
     deleteKey(id) { return query('DELETE FROM api_keys WHERE id=?').run(id).changes; },
     revoke(id) {
       db.exec('BEGIN IMMEDIATE');
@@ -116,12 +135,12 @@ export function accounts(db, defaultLimit) {
     },
     enable(id) { query('UPDATE users SET disabled=0 WHERE id=?').run(id); },
     issue,
-    byKey(key) { return lookup.get(digest(key)); },
+    byKey(key) { return lookup.get(digest(key),Date.now()); },
     reserve(key,now=Date.now()) {
       db.exec('BEGIN IMMEDIATE');
       try {
         query('DELETE FROM requests WHERE at<=?').run(now-hour);
-        const user=lookup.get(digest(key));
+        const user=lookup.get(digest(key),now);
         let status=401;
         if(user) {
           const {used}=query('SELECT count(*) AS used FROM requests WHERE key_id=?').get(user.key_id);

@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { ProxyAgent } from 'undici';
 import { accounts } from './accounts.mjs';
 import { browserWrite, portal, sessionToken } from './portal.mjs';
@@ -161,17 +162,27 @@ async function readJson(req,limit=4*1024*1024) {
   }
   return JSON.parse(Buffer.concat(chunks).toString());
 }
+async function readRaw(req,limit=2*1024*1024) { const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>limit)throw Error('Body too large');chunks.push(Buffer.from(chunk));}return Buffer.concat(chunks); }
+function stripeSignatureValid(raw,header,secret){ if(!header||!secret)return false;const values=Object.fromEntries(header.split(',').map(x=>x.split('=')));const expected=createHmac('sha256',secret).update(`${values.t}.${raw.toString()}`).digest('hex');try{return timingSafeEqual(Buffer.from(expected),Buffer.from(values.v1||''));}catch{return false;} }
 async function handler(req, res) {
   const requestUrl = new URL(req.url,'http://localhost'), path = requestUrl.pathname;
   res.setHeader('cache-control','no-store');
   res.setHeader('referrer-policy','no-referrer');
   res.setHeader('x-frame-options','DENY');
+  if(path==='/stripe/webhook' && req.method==='POST') {
+    const raw=await readRaw(req); if(!stripeSignatureValid(raw,req.headers['stripe-signature'],process.env.STRIPE_WEBHOOK_SECRET)) return json(res,400,{error:{message:'Invalid Stripe signature.'}});
+    let event;try{event=JSON.parse(raw)}catch{return json(res,400,{error:{message:'Invalid webhook payload.'}})}
+    if(event.type==='checkout.session.completed' || event.type==='customer.subscription.updated' || event.type==='customer.subscription.deleted') {
+      const object=event.data.object, meta=object.metadata||object.subscription_details?.metadata||{}; const uid=Number(meta.uid), quota=event.type==='customer.subscription.deleted'?store.defaultLimit:Number(meta.quota); if(Number.isSafeInteger(uid)&&Number.isSafeInteger(quota)&&quota>0) store.setUserQuota(uid,quota);
+    }
+    return json(res,200,{received:true});
+  }
   if(req.method==='GET' && /^\/(?:admin\/)?theme\.(css|js)$/.test(path)){
     const file=path.split('/').pop();
     res.writeHead(200,{'content-type':file.endsWith('.css')?'text/css':'text/javascript'});
     return res.end(await readFile(join(ROOT,file)));
   }
-  if (['/','/admin','/account','/admin/users','/login','/register'].includes(path) || path.startsWith('/portal/')) {
+  if (['/','/admin','/account','/admin/users','/login','/register','/setup'].includes(path) || path.startsWith('/portal/')) {
     return portal(req,res,path,store,readJson,json);
   }
   const adminRoute=['/dashboard','/api/proxies/import','/health/stats','/admin/allocation'].includes(path);
