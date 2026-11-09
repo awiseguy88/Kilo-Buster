@@ -118,6 +118,14 @@ test('hosted users, limits, proxy imports, admin allocation and revocation', asy
     assert.equal((await call('/stripe/webhook',event,{'stripe-signature':'t='+now+',v1='+sig})).status,200);
     const account=await (await call('/portal/me',undefined,auth)).json();
     assert.equal(account.keys.length,1);assert.equal(account.keys[0].quota,2500);assert.equal(account.invoices[0].amount,799);
+    const before=(await (await call('/health/stats',undefined,admin)).json()).proxies;
+    globalThis.fetch=async()=>new Response(JSON.stringify({code:'PROMOTION_MODEL_LIMIT_REACHED',message:'Sign up or come back later'}),{status:429,headers:{'content-type':'application/json'}});
+    const limited=await chat({authorization:'Bearer '+account.keys[0].key});
+    assert.equal(limited.status,429);assert.equal((await limited.json()).code,'PROMOTION_MODEL_LIMIT_REACHED');
+    const after=(await (await call('/health/stats',undefined,admin)).json()).proxies;
+    assert.equal(after.reduce((n,p)=>n+p.failures,0),before.reduce((n,p)=>n+p.failures,0)+1);
+    assert.equal(after.reduce((n,p)=>n+p.successes,0),before.reduce((n,p)=>n+p.successes,0));
+    assert.ok(after.some(p=>p.lastError.includes('Upstream rate limit')));
     assert.equal((await (await call('/portal/sales',undefined,admin)).json()).total.cents,799);
   } finally {
     globalThis.fetch=realFetch;
