@@ -74,8 +74,7 @@ export async function portal(req,res,path,store,readJson,json) {
   }
   const live=Number(/^(sk|rk)_live_/.test(process.env.STRIPE_SECRET_KEY||''));
   const setMemberSession=value=>res.setHeader('set-cookie',cookie+'='+value+cookieOptions.replace('Strict','Lax')+'; Max-Age=43200');
-  if(session?.temporary && path==='/portal/me')return send({username:store.user(session.uid).username,temporary:true});
-  if(session?.temporary && !['/portal/password','/portal/logout','/portal/checkout-return'].includes(path))return fail(403,'Choose a password in your account first.');
+  if(session?.temporary && !['/portal/me','/portal/password','/portal/logout','/portal/checkout-return'].includes(path))return fail(403,'Choose a password in your account first.');
   if(req.method==='GET' && path==='/portal/me') {
     if(!session?.uid)return fail(401,'Sign in required.');
     const {subscription,invoices}=store.billing(session.uid,live);
