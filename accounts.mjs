@@ -120,6 +120,10 @@ export function accounts(db, defaultLimit) {
         db.exec('COMMIT'); return {key,expires};
       } catch(e) { db.exec('ROLLBACK'); throw e; }
     },
+    getTrial(claim) {
+      const row=query('SELECT a.secret,c.expires FROM trial_claims c JOIN api_keys a ON a.id=c.key_id WHERE c.claim_hash=? AND c.expires>?').get(digest(claim),Date.now());
+      const key=reveal(row?.secret); return row&&key?{key,expires:row.expires}:null;
+    },
     assigned() { return query('SELECT COALESCE(SUM(k.quota),0) AS n FROM api_keys k JOIN users u ON u.id=k.uid WHERE u.disabled=0').get().n; },
     setKeyQuota(id,n) { return query('UPDATE api_keys SET quota=? WHERE id=?').run(n,id).changes; },
     setUserQuota(id,n) { const changed=query('UPDATE api_keys SET quota=? WHERE uid=?').run(n,id).changes; return changed || (issue(id,n)?1:0); },

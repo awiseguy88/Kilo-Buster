@@ -46,7 +46,7 @@ export async function portal(req,res,path,store,readJson,json) {
   if(path==='/portal/trial' && req.method==='POST') {
     if(!browserWrite(req)) return fail(403,'A same-site JSON request is required.');
     const claim=trialToken(req) || createHash('sha256').update((req.headers['user-agent']||'')+'|'+(req.socket?.remoteAddress||'')).digest('hex');
-    const trial=await store.createTrial(claim);
+    const trial=await store.createTrial(claim) || store.getTrial(claim);
     if(!trial) return fail(409,'A trial key has already been issued for this browser.');
     res.setHeader('set-cookie',trialCookie+'='+claim+cookieOptions+'; Max-Age=259200');
     const protocol=req.headers['x-forwarded-proto']?.split(',')[0] || 'https';
