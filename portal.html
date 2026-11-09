@@ -124,7 +124,9 @@ async function welcome(){
     const result=await api('/portal/checkout-return',{checkout});
     if(result.status==='pending'){status.textContent='Payment is still being confirmed. Refresh this page in a moment.';return;}
     if(result.status!=='ready'){status.textContent='This account link has expired. Use the sign-in link from your purchase email.';return;}
-    box.replaceChildren(el('h2','Set your dashboard password'),el('p','Choose a password with at least 10 characters. Your API key and endpoint are in the purchase email.'),status);
+    status.textContent='Payment confirmed. Opening your account…';
+    location.replace('/account');
+    return;
     const form=el('form'),pass=field(form,'New password','password','new-password');pass.minLength=10;pass.maxLength=256;
     const confirm=field(form,'Confirm password','password','new-password'),submit=el('button','Save password');form.append(submit);box.append(form);
     form.onsubmit=async event=>{event.preventDefault();if(pass.value!==confirm.value){status.textContent='Passwords do not match.';return;}submit.disabled=true;try{await api('/portal/password',{password:pass.value});location.replace('/account')}catch(error){status.textContent=error.message;submit.disabled=false}};
