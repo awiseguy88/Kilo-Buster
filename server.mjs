@@ -131,7 +131,7 @@ function pickProxy() {
     if (!available(proxy, now)) continue;
     // Keep connections pooled, but choose a healthy proxy per request so
     // slow or saturated endpoints cannot hold an entire request batch.
-    const score = proxy.active * 1000000 + (proxy.latencyMs || 5000);
+    const score = proxy.active * 10000000 + (proxy.latencyMs ? Math.min(9998,Math.floor(proxy.latencyMs/1000))*1000 : 9999000) + (proxy.shuffleRank ?? 0);
     if (score < bestScore || (score === bestScore && proxy.lastUsed < (selected?.lastUsed || Infinity))) {
       bestScore = score;
       selected = proxy;
@@ -146,7 +146,7 @@ function pickProxy() {
   return selected;
 }
 function markSuccess(proxy) { proxy.successes++; proxy.consecutiveFailures = 0; proxy.backoffUntil = 0; proxy.lastError = ''; scheduleSave(); }
-function markUpstreamLimit(proxy) { proxy.failures++; proxy.lastError = 'Upstream rate limit (HTTP 429); scope may be account or model'; scheduleSave(); }
+function markUpstreamLimit(proxy) { markFailure(proxy,'Upstream rate limit (HTTP 429); scope may be account or model'); }
 function markFailure(proxy, error) { proxy.failures++; proxy.consecutiveFailures++; proxy.backoffUntil = Date.now() + Math.min(15 * 60 * 1000, BACKOFF_BASE * 2 ** Math.min(proxy.consecutiveFailures - 1, 8)); proxy.lastError = String(error?.message || error).slice(0, 240); scheduleSave(); }
 function cors(res) { res.setHeader('access-control-allow-origin','*'); res.setHeader('access-control-allow-methods','GET, POST, OPTIONS'); res.setHeader('access-control-allow-headers','Content-Type, Authorization'); }
 function json(res, status, data) { res.writeHead(status, {'content-type':'application/json'}); res.end(JSON.stringify(data)); }
@@ -209,7 +209,7 @@ async function handler(req, res) {
   if (['/','/admin','/account','/admin/users','/login','/register','/reset','/setup','/welcome'].includes(path) || path.startsWith('/portal/')) {
     return portal(req,res,path,store,readJson,json);
   }
-  const adminRoute=['/dashboard','/api/proxies/import','/health/stats','/admin/allocation'].includes(path);
+  const adminRoute=['/dashboard','/api/proxies/import','/api/proxies/shuffle','/health/stats','/admin/allocation'].includes(path);
   let key,user;
   if(adminRoute) {
     if(!store.session(sessionToken(req))?.admin) {
@@ -233,7 +233,8 @@ async function handler(req, res) {
   }
   if (path === '/dashboard' && req.method === 'GET') { res.writeHead(200, {'content-type':'text/html; charset=utf-8'}); return res.end(await readFile(join(ROOT, 'dashboard.html'), 'utf8')); }
   if (path === '/api/proxies/import' && req.method === 'POST') { try { return json(res, 200, await importProxies()); } catch (error) { return json(res, 502, { error: { message: error.message } }); } }
-  if (path === '/health/stats' && req.method === 'GET') { const stats = proxies.map(proxyStats).sort((a,b) => (a.latencyMs ?? Infinity) - (b.latencyMs ?? Infinity)); return json(res, 200, { tokens: getUsage.get(), total: stats.length, available: stats.filter(p => p.backoffSeconds === 0 && p.remaining > 0).length, quota: MAX_PER_HOUR, proxies: stats }); }
+  if (path === '/api/proxies/shuffle' && req.method === 'POST') { for(const p of proxies)p.shuffleRank=Math.random()*999; return json(res,200,{total:proxies.length}); }
+  if (path === '/health/stats' && req.method === 'GET') { const rank=new Map(proxies.map(p=>[p.id,p.shuffleRank??0])); const stats = proxies.map(proxyStats).sort((a,b) => Math.floor((a.latencyMs??Infinity)/1000)-Math.floor((b.latencyMs??Infinity)/1000)||(rank.get(a.id)-rank.get(b.id))); return json(res, 200, { tokens: getUsage.get(), total: stats.length, available: stats.filter(p => p.backoffSeconds === 0 && p.remaining > 0).length, quota: MAX_PER_HOUR, proxies: stats }); }
   if (req.method === 'GET' && (path === '/v1/models' || path === '/models')) return json(res,200,{object:'list',data:[{id:MODEL,object:'model',created:0,owned_by:'kilo'}]});
   if (path !== '/v1/chat/completions' && path !== '/chat/completions') return json(res,404,{error:{message:'Endpoint not found.'}});
   if (req.method !== 'POST') return json(res,405,{error:{message:'Method not allowed.'}});
@@ -246,17 +247,18 @@ async function handler(req, res) {
   if(admission!==200) return json(res,admission,{error:admission===429
       ? {message:'This API key has reached its rolling hourly request limit. Upgrade your plan at https://kilo-buster-production.up.railway.app/pricing',type:'rate_limit_error',upgrade_url:'https://kilo-buster-production.up.railway.app/pricing'}
     : {message:'Invalid or revoked API key.',type:'authentication_error'}});
-  let last; const attempts = Math.min(proxies.length, Number(process.env.PROXY_RETRIES || 3));
-  for (let i=0; i<attempts; i++) { const proxy = pickProxy(); if (!proxy) return json(res, 429, { error: { message: 'All proxies are at their hourly quota or cooling down.', type: 'rate_limit_error' } }); const controller = new AbortController();
+  let last, lastLimit; const attempts = Math.min(proxies.length, Number(process.env.PROXY_RETRIES || 3));
+  for (let i=0; i<attempts; i++) { const proxy = pickProxy(); if (!proxy) break; const controller = new AbortController();
     const cancel = () => controller.abort();
     res.once("close", cancel);
-    try { if (res.destroyed) return; const headers = {'content-type':'application/json',accept:req.headers.accept || 'application/json','x-kilocode-mode':req.headers['x-kilocode-mode'] || 'coding'}; if (KILO_API_KEY) headers.authorization = `Bearer ${KILO_API_KEY}`; const started = performance.now(); const upstream = await fetch(UPSTREAM,{method:'POST',signal:controller.signal,headers,body:JSON.stringify(body),dispatcher:agents.get(proxy.url.href)}); if (upstream.ok) { const ms = Math.max(1, performance.now() - started); proxy.latencyMs = Math.round(proxy.latencyMs ? 0.7 * proxy.latencyMs + 0.3 * ms : ms); } console.log(`[request] proxy=${proxy.id} status=${upstream.status} tools=${Array.isArray(body.tools) ? body.tools.length : 0} stream=${Boolean(body.stream)}`); if (upstream.status >= 500) { markFailure(proxy, `Kilo returned HTTP ${upstream.status}`); await upstream.body?.cancel(); last = new Error(`Kilo returned HTTP ${upstream.status}`); continue; } if(upstream.status===429) markUpstreamLimit(proxy); else if(upstream.ok) markSuccess(proxy); res.writeHead(upstream.status,responseHeaders(upstream)); if (upstream.body) await forwardBody(upstream, res, user.id); return res.end(); } catch (e) { if (controller.signal.aborted) return; markFailure(proxy, e); if (res.headersSent) return res.destroy(); last=e;
+    try { if (res.destroyed) return; const headers = {'content-type':'application/json',accept:req.headers.accept || 'application/json','x-kilocode-mode':req.headers['x-kilocode-mode'] || 'coding'}; if (KILO_API_KEY) headers.authorization = `Bearer ${KILO_API_KEY}`; const started = performance.now(); const upstream = await fetch(UPSTREAM,{method:'POST',signal:controller.signal,headers,body:JSON.stringify(body),dispatcher:agents.get(proxy.url.href)}); if (upstream.ok) { const ms = Math.max(1, performance.now() - started); proxy.latencyMs = Math.round(proxy.latencyMs ? 0.7 * proxy.latencyMs + 0.3 * ms : ms); } console.log(`[request] proxy=${proxy.id} status=${upstream.status} tools=${Array.isArray(body.tools) ? body.tools.length : 0} stream=${Boolean(body.stream)}`); if (upstream.status >= 500) { markFailure(proxy, `Kilo returned HTTP ${upstream.status}`); await upstream.body?.cancel(); last = new Error(`Kilo returned HTTP ${upstream.status}`); continue; } if(upstream.status===429) { markUpstreamLimit(proxy); const response=await upstream.text(); lastLimit={headers:responseHeaders(upstream),body:response.slice(0,65536)}; continue; } if(upstream.ok) markSuccess(proxy); res.writeHead(upstream.status,responseHeaders(upstream)); if (upstream.body) await forwardBody(upstream, res, user.id); return res.end(); } catch (e) { if (controller.signal.aborted) return; markFailure(proxy, e); if (res.headersSent) return res.destroy(); last=e;
     } finally {
       res.off("close", cancel);
       proxy.active--;
     }
   }
-  return json(res,502,{error:{message:`All proxy attempts failed: ${last?.message || 'unknown error'}`,type:'api_connection_error'}});
+  if(lastLimit){res.writeHead(429,lastLimit.headers);return res.end(lastLimit.body)}
+  return json(res,502,{error:{message:`All proxy attempts failed: ${last?.message || 'No proxy available'}`,type:'api_connection_error'}});
 }
 if (process.env.KILO_BUSTER_TEST !== '1') {
   const refreshProxies=()=>importProxies().catch(error=>console.error('[proxy] automatic import failed:',error.message));

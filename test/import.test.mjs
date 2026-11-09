@@ -123,9 +123,12 @@ test('hosted users, limits, proxy imports, admin allocation and revocation', asy
     const limited=await chat({authorization:'Bearer '+account.keys[0].key});
     assert.equal(limited.status,429);assert.equal((await limited.json()).code,'PROMOTION_MODEL_LIMIT_REACHED');
     const after=(await (await call('/health/stats',undefined,admin)).json()).proxies;
-    assert.equal(after.reduce((n,p)=>n+p.failures,0),before.reduce((n,p)=>n+p.failures,0)+1);
+    assert.equal(after.reduce((n,p)=>n+p.failures,0),before.reduce((n,p)=>n+p.failures,0)+2);
     assert.equal(after.reduce((n,p)=>n+p.successes,0),before.reduce((n,p)=>n+p.successes,0));
     assert.ok(after.some(p=>p.lastError.includes('Upstream rate limit')));
+    assert.ok(after.every(p=>p.backoffSeconds>0));
+    assert.equal((await call('/api/proxies/shuffle',{},member)).status,403);
+    assert.equal((await call('/api/proxies/shuffle',{},admin)).status,200);
     assert.equal((await (await call('/portal/sales',undefined,admin)).json()).total.cents,799);
   } finally {
     globalThis.fetch=realFetch;
