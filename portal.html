@@ -91,14 +91,14 @@ function metrics(parent,values){
 function guide(){
   $('title').textContent='Setup guide'; link(nav,'Sign in','/login'); link(nav,'Create account','/register');
   const p=el('section',undefined,'panel');content.append(p);p.append(el('h2','Connect any OpenAI-compatible tool'),el('p','Set the base URL to the endpoint below, use your assigned API key, and select the model kilo-auto/free.'),el('h3','Endpoint URL'),el('code',location.origin+'/v1'),el('h3','Model'),el('code','kilo-auto/free'));
-  const trial=el('section',undefined,'panel');content.append(trial);trial.append(el('h2','Try the service'),el('p','Get one private trial key for this browser. It is limited to 750 requests per hour and expires after 3 days.'),button(trial,'Get trial key',async()=>{const r=await api('/portal/trial',{});trial.append(el('p','Trial endpoint: '+r.endpoint));const input=el('input');input.value=r.key;input.readOnly=true;input.className='secret';trial.append(input);message('Trial key created. Copy it now and keep it private.')}));
+  const trial=el('section',undefined,'panel');content.append(trial);const renderTrial=r=>{trial.replaceChildren(el('h2','Try the service'),el('p','Your private trial key is limited to 750 requests per hour and expires after 3 days.'));const input=el('input');input.value=r.key;input.readOnly=true;input.className='secret';trial.append(el('p','Trial endpoint: '+r.endpoint),input);localStorage.setItem('kb_trial_key',r.key);message('Your current trial key is shown below. Keep it private.')};trial.append(el('h2','Try the service'),el('p','Get one private trial key for this browser. It is limited to 750 requests per hour and expires after 3 days.'),button(trial,'Get trial key',async()=>renderTrial(await api('/portal/trial',{}))));if(localStorage.getItem('kb_trial_key')){const input=el('input');input.value=localStorage.getItem('kb_trial_key');input.readOnly=true;input.className='secret';trial.append(el('p','Your current trial key'),input)}
   const steps=el('section',undefined,'panel');content.append(steps);steps.append(el('h2','Quick-start examples'));
   const examples=[['OpenAI SDK (JavaScript)',`import OpenAI from 'openai';\nconst client = new OpenAI({ baseURL: '${location.origin}/v1', apiKey: process.env.KILO_BUSTER_API_KEY });\nconst result = await client.chat.completions.create({ model: 'kilo-auto/free', messages: [{ role: 'user', content: 'Hello' }] });`],['OpenAI SDK (Python)',`from openai import OpenAI\nclient = OpenAI(base_url='${location.origin}/v1', api_key=os.environ['KILO_BUSTER_API_KEY'])\nprint(client.chat.completions.create(model='kilo-auto/free', messages=[{'role':'user','content':'Hello'}]))`],['curl',`curl ${location.origin}/v1/chat/completions \\\n  -H "Authorization: Bearer $KILO_BUSTER_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"kilo-auto/free","messages":[{"role":"user","content":"Hello"}]}'`]];
   for(const [name,code] of examples){const block=el('div',undefined,'row');block.append(el('strong',name));const pre=el('pre');pre.textContent=code;block.append(pre);button(block,'Copy example',async()=>{await navigator.clipboard.writeText(code);message('Example copied.')},true);steps.append(block)}
   steps.append(el('p','Compatible with OpenClaw, DeepSeek Harness, OpenCode, Kilo Code, Claude Code, and other OpenAI-compatible tools. Keep your API key private.'));
 }
 async function account(){
-  const u=await api('/portal/me');content.replaceChildren();$('title').textContent=u.username;
+  const u=await api('/portal/me');content.replaceChildren();$('title').textContent=u.username;if(new URLSearchParams(location.search).get('billing')==='success')message('Payment confirmed. Your plan and API quota are active.');
   metrics(content,[['Requests left this hour',u.remaining],['Used in last 60 min',u.used],['Hourly limit',u.quota],['Lifetime requests',u.total]]);
   const p=el('section',undefined,'panel');content.append(p);p.append(el('h2','API access'),el('code',location.origin+'/v1'),
     el('p',u.keys.length?'Assigned keys':'Your administrator can assign you an API key.'));
@@ -126,7 +126,7 @@ async function admins(){
   if(!users.length)panel.append(el('p','Registered users will appear here.'));
   for(const u of users){
     const row=el('div',undefined,'row'),actions=el('div',undefined,'actions');panel.append(row);
-    row.append(el('strong',u.username+(u.disabled?' · Revoked':'')),el('p',u.used+' used this hour · '+u.remaining+' left · '+u.total+' lifetime requests'),actions);
+    row.append(el('strong',u.username+(u.trial_until?' · Trial':'')+(u.disabled?' · Revoked':'')),el('p',u.used+' used this hour · '+u.remaining+' left · '+u.total+' lifetime requests'),actions);
     const base='/portal/users/'+u.id+'/';
     if(!u.disabled){
       const limit=limitInput(actions,'New key limit / hour',v.defaultLimit);

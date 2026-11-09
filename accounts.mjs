@@ -51,9 +51,9 @@ export function accounts(db, defaultLimit) {
     db.exec('CREATE INDEX IF NOT EXISTS key_window ON requests(key_id,at); COMMIT');
   } catch(e) { db.exec('ROLLBACK'); throw e; }
   const lookup = query('SELECT u.id,k.id AS key_id,k.quota FROM api_keys k JOIN users u ON u.id=k.uid WHERE k.hash=? AND u.disabled=0 AND (k.expires IS NULL OR k.expires>?)');
-  const view = `SELECT id,username,disabled,total,input,output,
+  const view = `SELECT id,username,disabled,trial_until,total,input,output,
     (SELECT count(*) FROM requests r WHERE r.uid=u.id AND r.at>?) AS used FROM users u`;
-  const keyRows=query(`SELECT k.id,k.suffix,k.quota,count(r.at) AS used FROM api_keys k
+  const keyRows=query(`SELECT k.id,k.suffix,k.quota,k.expires,count(r.at) AS used FROM api_keys k
     LEFT JOIN requests r ON r.key_id=k.id AND r.at>? WHERE k.uid=? GROUP BY k.id ORDER BY k.id`);
   const summary = (row,revealKeys=false) => {
     const keys=keyRows.all(Date.now()-hour,row.id).map(k=>({...k,remaining:Math.max(0,k.quota-k.used)}));
