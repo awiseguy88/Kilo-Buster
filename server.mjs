@@ -234,7 +234,8 @@ async function handler(req, res) {
   }
   return json(res,502,{error:{message:`All proxy attempts failed: ${last?.message || 'unknown error'}`,type:'api_connection_error'}});
 }
-if (process.env.KILO_BUSTER_TEST !== '1') http.createServer((req,res)=>handler(req,res).catch(()=> {
+if (process.env.KILO_BUSTER_TEST !== '1') http.createServer((req,res)=>handler(req,res).catch(error=> {
+  console.error('[http] request failed:',error?.stack||error);
   if(res.headersSent) return res.destroy();
   json(res,500,{error:{message:'Internal server error.'}});
 })).listen(PORT,HOST,()=>console.log(`API listening on ${HOST}:${PORT}`));
