@@ -5,3 +5,4 @@ header{flex-wrap:wrap;gap:10px}.jump-links{margin-left:auto}.appearance{display:
 .appearance button.appearance-button{border:1px solid var(--border);border-radius:8px;padding:8px 11px;font:600 13px system-ui;background:var(--secondary);color:var(--text)}
 .appearance-menu{background:var(--surface);border:1px solid var(--border)}.appearance-menu label{color:var(--muted);font:12px system-ui}.appearance-menu select{color:var(--text);background:var(--field);border:1px solid var(--border);border-radius:5px}
 .appearance-menu label{margin:0}.appearance-button{cursor:pointer}.appearance{max-width:100%}
+.appearance{position:relative;display:inline-flex;flex:none}.appearance-menu{position:absolute;top:calc(100% + 8px);right:0;z-index:100;display:grid;gap:10px;min-width:180px;padding:12px;box-shadow:0 12px 28px #0004}.appearance-menu label{display:grid;gap:4px}.appearance-menu[hidden]{display:none}

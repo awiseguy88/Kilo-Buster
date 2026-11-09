@@ -42,8 +42,11 @@ export function accounts(db, defaultLimit) {
     if (!query("SELECT 1 FROM pragma_table_info('users') WHERE name='trial_until'").get()) db.exec('ALTER TABLE users ADD COLUMN trial_until INTEGER');
     if (!query("SELECT 1 FROM pragma_table_info('users') WHERE name='joined_at'").get()) db.exec('ALTER TABLE users ADD COLUMN joined_at INTEGER');
     if (!query("SELECT 1 FROM pragma_table_info('users') WHERE name='temporary'").get()) db.exec('ALTER TABLE users ADD COLUMN temporary INTEGER NOT NULL DEFAULT 0');
+    if (!query("SELECT 1 FROM pragma_table_info('users') WHERE name='email'").get()) db.exec('ALTER TABLE users ADD COLUMN email TEXT COLLATE NOCASE');
+    db.exec('CREATE TABLE IF NOT EXISTS password_resets (hash TEXT PRIMARY KEY, uid INTEGER NOT NULL, expires INTEGER NOT NULL)');
     if (!query("SELECT 1 FROM pragma_table_info('api_keys') WHERE name='expires'").get()) db.exec('ALTER TABLE api_keys ADD COLUMN expires INTEGER');
     db.exec('CREATE TABLE IF NOT EXISTS trial_claims (claim_hash TEXT PRIMARY KEY, key_id INTEGER NOT NULL, expires INTEGER NOT NULL)');
+    db.exec('CREATE TABLE IF NOT EXISTS account_trials (uid INTEGER PRIMARY KEY, created INTEGER NOT NULL)');
     if (!query("SELECT 1 FROM pragma_table_info('requests') WHERE name='key_id'").get()) {
       db.exec(`ALTER TABLE requests ADD COLUMN key_id INTEGER;
         INSERT INTO api_keys(uid,hash,suffix,quota) SELECT id,key_hash,suffix,quota FROM users WHERE key_hash IS NOT NULL AND disabled=0;
@@ -84,6 +87,16 @@ export function accounts(db, defaultLimit) {
       .run(digest(key),key.slice(-6),quota,protect(key),id).changes ? key : null;
   }
   return {
+    createAccountTrial(uid){
+      const now=Date.now();db.exec('BEGIN IMMEDIATE');
+      try {
+        if(!query('SELECT id FROM users WHERE id=? AND disabled=0').get(uid)||query('SELECT 1 FROM account_trials WHERE uid=?').get(uid)){db.exec('ROLLBACK');return null;}
+        const key=issue(uid,750);
+        query('UPDATE api_keys SET expires=? WHERE hash=?').run(now+72*hour,digest(key));
+        query('INSERT INTO account_trials VALUES(?,?)').run(uid,now);
+        db.exec('COMMIT');return {key,expires:now+72*hour};
+      }catch(e){db.exec('ROLLBACK');throw e;}
+    },
     startGuestOrder(browser,quota) {
       query('DELETE FROM guest_orders WHERE uid IS NULL AND created<?').run(Date.now()-30*24*hour);
       const id=secret();
@@ -130,8 +143,25 @@ export function accounts(db, defaultLimit) {
     },
     welcomeSent(sub){query('UPDATE welcome_mail SET payload=NULL,sent=? WHERE sub=?').run(Date.now(),sub);},
     welcomeFailed(sub,attempts){query('UPDATE welcome_mail SET attempts=attempts+1,retry_at=? WHERE sub=?').run(Date.now()+Math.min(hour,30000*2**Math.min(attempts,7)),sub);},
-    async register(username,password) {
-      return insertUser.run(username,await passwordHash(password),defaultLimit,Date.now()).changes;
+    async register(username,password,email) {
+      const result=insertUser.run(username,await passwordHash(password),defaultLimit,Date.now());
+      if(result.changes&&email)query('UPDATE users SET email=? WHERE id=?').run(email,result.lastInsertRowid);
+      return result.changes;
+    },
+    createReset(email,username){
+      const user=query('SELECT id FROM users WHERE email=? AND username=? AND disabled=0').get(email,username);
+      if(!user)return null;
+      const token=secret();query('DELETE FROM password_resets WHERE uid=? OR expires<?').run(user.id,Date.now());
+      query('INSERT INTO password_resets VALUES(?,?,?)').run(digest(token),user.id,Date.now()+30*60*1000);return token;
+    },
+    async resetPassword(token,password){
+      const hash=await passwordHash(password);db.exec('BEGIN IMMEDIATE');
+      try{const row=query('SELECT uid FROM password_resets WHERE hash=? AND expires>?').get(digest(token),Date.now());
+        if(!row){db.exec('ROLLBACK');return false;}
+        query('UPDATE users SET password=?,temporary=0 WHERE id=? AND disabled=0').run(hash,row.uid);
+        query('DELETE FROM password_resets WHERE uid=?').run(row.uid);query('DELETE FROM sessions WHERE uid=?').run(row.uid);
+        db.exec('COMMIT');return true;
+      }catch(e){db.exec('ROLLBACK');throw e;}
     },
     async createWithKey(username,password,quota) {
       const hash=await passwordHash(password);
@@ -179,6 +209,7 @@ export function accounts(db, defaultLimit) {
             temporaryPassword=randomBytes(18).toString('base64url');
             const salt=secret(), hash=salt+'.'+scryptSync(temporaryPassword,salt,64).toString('hex');
             p.uid=Number(insertUser.run(username,hash,defaultLimit,Date.now()).lastInsertRowid);
+            query('UPDATE users SET email=? WHERE id=?').run(p.email,p.uid);
             query('UPDATE users SET temporary=1 WHERE id=?').run(p.uid);
             query('UPDATE guest_orders SET uid=?,sub=? WHERE id=?').run(p.uid,p.sub,p.guest);
           } else p.uid=order.uid;

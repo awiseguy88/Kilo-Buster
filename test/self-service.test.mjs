@@ -13,6 +13,39 @@ test('public content exposes the trial, model and four prices without JavaScript
   }
 });
 
+test('password reset requires matching email and username, expires and is single-use',async()=>{
+  const db=new DatabaseSync(':memory:'),s=accounts(db,30);
+  try{
+    await s.register('recovery-user','old-password-123','owner@example.com');
+    assert.equal(s.createReset('wrong@example.com','recovery-user'),null);
+    assert.equal(s.createReset('owner@example.com','wrong-user'),null);
+    const expired=s.createReset('owner@example.com','recovery-user');
+    db.prepare('UPDATE password_resets SET expires=0').run();
+    assert.equal(await s.resetPassword(expired,'new-password-123'),false);
+    const token=s.createReset('owner@example.com','recovery-user');
+    const session=s.newSession(1);
+    assert.equal(await s.resetPassword(token,'new-password-123'),true);
+    assert.equal(await s.resetPassword(token,'another-password'),false);
+    assert.equal(s.session(session),null);
+    assert.equal(await s.login('recovery-user','old-password-123'),null);
+    assert.equal(await s.login('recovery-user','new-password-123'),1);
+  }finally{db.close()}
+});
+
+test('an account trial is issued once and expires after three days',async()=>{
+  const db=new DatabaseSync(':memory:'),s=accounts(db,30);
+  try{
+    await s.register('trial-member','test-password-123');
+    const trial=s.createAccountTrial(1);
+    assert.ok(trial.key.startsWith('kb_'));
+    assert.equal(s.byKey(trial.key).quota,750);
+    assert.equal(s.createAccountTrial(1),null);
+    db.prepare('UPDATE api_keys SET expires=? WHERE uid=?').run(Date.now()-1,1);
+    assert.equal(s.byKey(trial.key),undefined);
+    assert.equal(s.createAccountTrial(1),null);
+  }finally{db.close()}
+});
+
 test('only a paid, matching invoice grants a single expiring key; retries, renewals and cancellation',async()=>{
   process.env.STRIPE_SECRET_KEY='sk_test_fixture';
   const env={STRIPE_SECRET_KEY:'sk_test_fixture',STRIPE_PRICE_2500:'price_fixture'};

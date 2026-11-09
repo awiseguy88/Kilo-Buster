@@ -18,6 +18,7 @@ test('hosted users, limits, proxy imports, admin allocation and revocation', asy
   const call=(url,body,headers={})=>realFetch(origin+url,{redirect:'manual',headers:{'Content-Type':'application/json',...headers},
     ...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)})});
   try {
+    assert.equal((await call('/healthz')).status,200);
     const dashboard=await call('/dashboard?token=old-secret');
     assert.equal(dashboard.headers.get('location'),'/admin');
     const login=await call('/portal/admin',{password:process.env.ADMIN_PASSWORD});
@@ -54,9 +55,13 @@ test('hosted users, limits, proxy imports, admin allocation and revocation', asy
     globalThis.fetch=async()=>new Response('user:pass@example.com:8080\rhttp://user:pass@example.com:8080\rinvalid\rother.example:3128\r');
     assert.deepEqual(await (await call('/api/proxies/import',{},admin)).json(),{added:2,duplicates:1,invalid:1,total:2});
     assert.equal((await (await call('/api/proxies/import',{},admin)).json()).duplicates,3);
-    globalThis.fetch=async()=>new Response(JSON.stringify({usage:{prompt_tokens:3,completion_tokens:2}}));
+    globalThis.fetch=async()=>new Response(JSON.stringify({usage:{prompt_tokens:3,completion_tokens:2}}),{headers:{'content-encoding':'gzip','content-length':'999','connection':'keep-alive','keep-alive':'timeout=987'}});
     const results=await Promise.all([chat(key),chat(key)]);
     assert.deepEqual(results.map(r=>r.status).sort(),[200,429]);
+    const forwarded=results.find(r=>r.status===200);
+    assert.equal(forwarded.headers.get('content-encoding'),null);
+    assert.notEqual(forwarded.headers.get('content-length'),'999');
+    assert.notEqual(forwarded.headers.get('keep-alive'),'timeout=987');
     const u=await me();
     assert.deepEqual([u.total,u.used,u.remaining,u.input,u.output],[1,1,0,3,2]);
     const rotated=await issue(2);

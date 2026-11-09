@@ -76,17 +76,27 @@ function auth(){
   link(nav,'Home','/');link(nav,'Pricing','/pricing');if(admin)link(nav,'User sign-in','/login');link(nav,'Setup guide','/setup');
   const form=el('form',undefined,'panel login');content.append(form);
   const user=admin?null:field(form,'Username','text','username');
+  const email=register?field(form,'Email address','email','email'):null;
   if(user){user.pattern='[a-zA-Z0-9_\\-]{3,32}';user.title='3–32 letters, numbers, underscores or hyphens';}
   const pass=field(form,register?'Password (at least 10 characters)':'Password','password',register?'new-password':'current-password');
   if(register)pass.minLength=10;
   button(form,'Show password',()=>{pass.type=pass.type==='password'?'text':'password';toggle.textContent=pass.type==='password'?'Show password':'Hide password'},true);
   const toggle=form.lastElementChild;
   const submit=el('button',register?'Create account':'Sign in');form.append(submit);
-  if(!admin){const p=el('p');link(p,register?'Already registered? Sign in':'Create an account','/'+(register?'login':'register'));form.append(p)}
+  if(!admin){const p=el('p');link(p,register?'Already registered? Sign in':'Create an account','/'+(register?'login':'register'));form.append(p);if(!register){const recovery=el('p');link(recovery,'Forgot password?','/reset');form.append(recovery)}}
   form.onsubmit=async e=>{e.preventDefault();submit.disabled=true;try{
-    const r=await api('/portal/'+(admin?'admin':register?'register':'login'),{username:user?.value,password:pass.value});
+    const r=await api('/portal/'+(admin?'admin':register?'register':'login'),{username:user?.value,password:pass.value,...(email?{email:email.value}:{})});
     location.replace(r.location);
   }catch(err){message(err.message)}finally{submit.disabled=false}};
+}
+function resetPage(){
+  document.body.classList.add('auth');link(nav,'Home','/');link(nav,'Sign in','/login');
+  const token=new URLSearchParams(location.search).get('token');$('title').textContent=token?'Choose a new password':'Reset password';
+  const form=el('form',undefined,'panel login');content.append(form);
+  const username=token?null:field(form,'Username','text','username'), email=token?null:field(form,'Email address','email','email'), password=token?field(form,'New password','password','new-password'):null;
+  if(password){password.minLength=10;password.maxLength=256;history.replaceState(null,'','/reset')}
+  const submit=el('button',token?'Set password':'Send reset link');form.append(submit);
+  form.onsubmit=async e=>{e.preventDefault();submit.disabled=true;try{const result=await api(token?'/portal/reset-password':'/portal/reset-request',token?{token,password:password.value}:{username:username.value,email:email.value});message(token?'Password updated. You can now sign in.':result.message);if(token){form.replaceChildren();link(form,'Sign in','/login')}}catch(error){message(error.message)}finally{submit.disabled=false}};
 }
 function metrics(parent,values){
   const block=el('div',undefined,'metrics');parent.append(block);
@@ -94,6 +104,7 @@ function metrics(parent,values){
 }
 function guide(){
   $('title').textContent='Setup guide'; link(nav,'Home','/'); link(nav,'Pricing','/pricing'); link(nav,'Sign in','/login'); link(nav,'Create account','/register');
+  api('/portal/session').then(s=>{if(!s.signedIn)return;nav.querySelectorAll('a[href="/login"],a[href="/register"]').forEach(a=>a.remove());link(nav,s.admin?'Admin dashboard':'My account',s.admin?'/dashboard':'/account');signOut()}).catch(()=>{});
   const p=el('section',undefined,'panel');content.append(p);p.append(el('h2','Connect any OpenAI-compatible tool'),el('p','Set the base URL to the endpoint below, use your assigned API key, and select the model kilo-auto/free.'),el('h3','Endpoint URL'),el('code',location.origin+'/v1'),el('h3','Model'),el('code','kilo-auto/free'));
   const trial=el('section',undefined,'panel');content.append(trial);
   trial.append(el('h2','Try the service'),el('p','One three-day trial per browser, up to 750 requests per rolling hour.'));
@@ -135,10 +146,12 @@ async function welcome(){
 }
 async function account(){
   nav.replaceChildren();link(nav,'Home','/');link(nav,'Setup guide','/setup');link(nav,'Pricing','/pricing');signOut();
-  const u=await api('/portal/me');content.replaceChildren();$('title').textContent=u.username;if(new URLSearchParams(location.search).get('billing')==='success')message('Welcome back from Checkout. Your current keys and limits are shown below.');
+  const u=await api('/portal/me');content.replaceChildren();$('title').textContent='Welcome back, '+u.username;if(new URLSearchParams(location.search).get('billing')==='success')message('Welcome back from Checkout. Your current keys and limits are shown below.');
+  if(u.temporary){const notice=el('section',undefined,'panel');notice.append(el('h2','Set your password'),el('p','Use your temporary password from your welcome email in Account security below to choose your own password.'));content.append(notice)}
   metrics(content,[['Requests left this hour',u.remaining],['Used in last 60 min',u.used],['Hourly limit',u.quota],['Lifetime requests',u.total]]);
   const p=el('section',undefined,'panel account-panel');content.append(p);p.append(el('h2','API access'),el('code',location.origin+'/v1'),
-    el('p',u.keys.length?'Assigned keys':'Your administrator can assign you an API key.'));
+    el('p',u.keys.length?'Assigned keys':'Try the service or choose a monthly plan below.'));
+  if(!u.keys.length)button(p,'Start free trial',async()=>{await api('/portal/account-trial',{});await account();message('Your three-day trial is ready.')});
   for(const k of u.keys){const line=el('div',undefined,'key-line');line.append(el('strong','API key · '+k.suffix),el('p',k.remaining+' of '+k.quota+' requests left this hour'));const copy=el('button','Copy API key','secondary');copy.type='button';copy.onclick=async()=>{try{await navigator.clipboard.writeText(k.key);message('API key copied to clipboard.')}catch{message('Clipboard access was blocked.')}};line.append(copy);p.append(line)}
   const plans=el('section',undefined,'panel account-panel subscription-panel');plans.append(el('h2','Your subscription'));content.append(plans);
   if(u.paidUntil){
@@ -209,7 +222,8 @@ async function admins(){
   }
 }
 function limitInput(parent,label,value){const input=field(parent,label,'number');input.min=0;input.max=1000000;input.value=value;return input}
-if(path==='/setup')guide();
+if(path==='/reset')resetPage();
+else if(path==='/setup')guide();
 else if(path==='/welcome')welcome();
 else if(path==='/account'){account().catch(e=>message(e.message));setInterval(()=>{if(!document.hidden&&!$('upgrade').open&&!document.activeElement?.closest('.password-change'))account().catch(e=>message(e.message))},15000)}
 else if(path==='/admin/users'){$('title').textContent='Accounts and allocation';link(nav,'Home','/');link(nav,'Proxy dashboard','/dashboard');link(nav,'Setup guide','/setup');signOut();admins().catch(e=>message(e.message));button(nav,'Refresh',admins,true)}
