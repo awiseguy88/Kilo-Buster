@@ -1,11 +1,13 @@
 import { readFile } from 'node:fs/promises';
 import { createHash,randomBytes } from 'node:crypto';
 import { sameSecret, validLimit } from './accounts.mjs';
+import { siteOrigin } from './welcome.mjs';
 
 const html = await readFile(new URL('./portal.html', import.meta.url));
 const artwork = await readFile(new URL('./assets/Kilo Buster_ Breaking Network Chains.png',import.meta.url));
 const cookie = '__Host-kb_session';
 const trialCookie = '__Host-kb_trial';
+const orderCookie = '__Host-kb_order';
 const cookieOptions = '; Path=/; HttpOnly; SameSite=Strict; Secure';
 const attempts = new Map();
 const cleanup = setInterval(() => {
@@ -65,12 +67,15 @@ export async function portal(req,res,path,store,readJson,json) {
     const protocol=req.headers['x-forwarded-proto']?.split(',')[0] || 'https';
     return send({key:trial.key,expires:trial.expires,endpoint:`${protocol}://${req.headers.host}/v1`});
   }
-  if (req.method==='GET' && ['/','/login','/register','/admin','/account','/admin/users','/setup'].includes(path)) {
+  if (req.method==='GET' && ['/','/login','/register','/admin','/account','/admin/users','/setup','/welcome'].includes(path)) {
     if (path==='/admin/users' && !session?.admin) return redirect('/admin');
     if (path==='/account' && !session?.uid) return redirect('/login');
     res.writeHead(200,{'content-type':'text/html; charset=utf-8'});return res.end(html);
   }
   const live=Number(/^(sk|rk)_live_/.test(process.env.STRIPE_SECRET_KEY||''));
+  const setMemberSession=value=>res.setHeader('set-cookie',cookie+'='+value+cookieOptions.replace('Strict','Lax')+'; Max-Age=43200');
+  if(session?.temporary && path==='/portal/me')return send({username:store.user(session.uid).username,temporary:true});
+  if(session?.temporary && !['/portal/password','/portal/logout','/portal/checkout-return'].includes(path))return fail(403,'Choose a password in your account first.');
   if(req.method==='GET' && path==='/portal/me') {
     if(!session?.uid)return fail(401,'Sign in required.');
     const {subscription,invoices}=store.billing(session.uid,live);
@@ -84,6 +89,20 @@ export async function portal(req,res,path,store,readJson,json) {
   let data;
   try {data=await readJson(req,2048);} catch {return fail(400,'Invalid or oversized JSON.');}
   if (!data || typeof data!=='object') return fail(400,'Invalid request.');
+  const orderProof=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith(orderCookie+'='))?.slice(orderCookie.length+1);
+  if(path==='/portal/checkout-return'){
+    if(!orderProof||typeof data.checkout!=='string'||data.checkout.length>255)return send({status:'unavailable'});
+    const claim=store.claimCheckout(orderProof,data.checkout);
+    if(claim.token)setMemberSession(claim.token);
+    return send({status:claim.status});
+  }
+  if(path==='/portal/password'){
+    if(!session?.temporary)return fail(403,'A new account sign-in is required.');
+    if(typeof data.password!=='string'||data.password.length<10||data.password.length>256)return fail(400,'Use a password between 10 and 256 characters.');
+    const fresh=await store.setFirstPassword(session.uid,data.password);
+    if(!fresh)return fail(409,'Sign in with your updated password.');
+    setMemberSession(fresh);return send({});
+  }
   if(path==='/portal/logout') {
     store.logout(token); res.setHeader('set-cookie',cookie+'='+cookieOptions+'; Max-Age=0'); return send({});
   }
@@ -132,11 +151,11 @@ export async function portal(req,res,path,store,readJson,json) {
     } catch {return fail(502,'Email delivery could not be confirmed. Please try again.');}
   }
   if(path==='/portal/checkout'||path==='/portal/billing-portal') {
-    if(!session?.uid) return fail(403,'User sign-in required.');
+    if((path==='/portal/billing-portal'||session?.admin)&&!session?.uid)return fail(403,'Sign in with a customer account.');
     if(!process.env.STRIPE_SECRET_KEY) return fail(503,'Stripe is not configured yet.');
     const prices={2500:process.env.STRIPE_PRICE_2500,5000:process.env.STRIPE_PRICE_5000,7500:process.env.STRIPE_PRICE_7500,10000:process.env.STRIPE_PRICE_10000};
-    const origin=`${req.headers['x-forwarded-proto']?.split(',')[0]||'https'}://${req.headers.host}`;
-    const sub=store.billing(session.uid,live).subscription;
+    const origin=siteOrigin();
+    const sub=session?.uid && store.billing(session.uid,live).subscription;
     if(path==='/portal/billing-portal'){
       if(!sub?.customer)return fail(409,'No linked subscription.');
       const result=await fetch('https://api.stripe.com/v1/billing_portal/sessions',{method:'POST',headers:{Authorization:'Bearer '+process.env.STRIPE_SECRET_KEY},body:new URLSearchParams({customer:sub.customer,return_url:origin+'/account'}),signal:AbortSignal.timeout(12000)});
@@ -145,9 +164,26 @@ export async function portal(req,res,path,store,readJson,json) {
     }
     if(sub)return fail(409,'Use Manage billing for your existing subscription.');
     const price=Object.hasOwn(prices,data.price)&&prices[data.price]; if(!price) return fail(400,'Invalid plan.');
-    const form=new URLSearchParams({mode:'subscription','success_url':origin+'/account?billing=success','cancel_url':origin+'/account?billing=cancelled','client_reference_id':String(session.uid),'metadata[uid]':String(session.uid),'metadata[quota]':String(data.price),'line_items[0][price]':price,'line_items[0][quantity]':'1','subscription_data[metadata][uid]':String(session.uid),'subscription_data[metadata][quota]':String(data.price)});
+    if(!process.env.RESEND_API_KEY||!process.env.USAGE_EMAIL_FROM)return fail(503,'Checkout is unavailable while purchase email is being configured.');
+    const form=new URLSearchParams({mode:'subscription','line_items[0][price]':price,'line_items[0][quantity]':'1','subscription_data[metadata][quota]':String(data.price)});
+    let order;
+    if(session?.uid){
+      form.set('subscription_data[metadata][uid]',String(session.uid));
+      form.set('client_reference_id',String(session.uid));
+      form.set('success_url',origin+'/account?billing=success');
+      form.set('cancel_url',origin+'/account?billing=cancelled');
+    }else{
+      if(limited('checkout:'+req.socket.remoteAddress,30))return fail(429,'Please wait a minute before starting another checkout.');
+      const proof=/^[A-Za-z0-9_-]{43}$/.test(orderProof||'')?orderProof:randomBytes(32).toString('base64url');
+      order=store.startGuestOrder(proof,Number(data.price));
+      form.set('subscription_data[metadata][guest_order]',order);
+      form.set('success_url',origin+'/welcome?checkout={CHECKOUT_SESSION_ID}');
+      form.set('cancel_url',origin+'/pricing');
+      res.setHeader('set-cookie',orderCookie+'='+proof+cookieOptions.replace('Strict','Lax')+'; Max-Age=172800');
+    }
     const response=await fetch('https://api.stripe.com/v1/checkout/sessions',{method:'POST',headers:{Authorization:'Bearer '+process.env.STRIPE_SECRET_KEY,'Content-Type':'application/x-www-form-urlencoded'},body:form,signal:AbortSignal.timeout(12000)});
     const result=await response.json(); if(!response.ok||!result.url) { console.error('[stripe] checkout failed',response.status,result?.error?.code||result?.error?.type||'unknown',response.headers.get('request-id')); return fail(502,'Checkout is unavailable. Please try again or contact support.'); }
+    if(order)store.bindCheckout(order,result.id);
     return send({url:result.url});
   }
   if(!session?.admin) return fail(403,'Admin sign-in required.');

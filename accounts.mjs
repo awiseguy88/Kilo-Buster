@@ -1,4 +1,4 @@
-import { createHash, randomBytes, scrypt, timingSafeEqual, createCipheriv, createDecipheriv } from 'node:crypto';
+import { createHash, randomBytes, scrypt, scryptSync, timingSafeEqual, createCipheriv, createDecipheriv } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const derive = promisify(scrypt);
@@ -41,6 +41,7 @@ export function accounts(db, defaultLimit) {
     if (!query("SELECT 1 FROM pragma_table_info('api_keys') WHERE name='secret'").get()) db.exec('ALTER TABLE api_keys ADD COLUMN secret TEXT');
     if (!query("SELECT 1 FROM pragma_table_info('users') WHERE name='trial_until'").get()) db.exec('ALTER TABLE users ADD COLUMN trial_until INTEGER');
     if (!query("SELECT 1 FROM pragma_table_info('users') WHERE name='joined_at'").get()) db.exec('ALTER TABLE users ADD COLUMN joined_at INTEGER');
+    if (!query("SELECT 1 FROM pragma_table_info('users') WHERE name='temporary'").get()) db.exec('ALTER TABLE users ADD COLUMN temporary INTEGER NOT NULL DEFAULT 0');
     if (!query("SELECT 1 FROM pragma_table_info('api_keys') WHERE name='expires'").get()) db.exec('ALTER TABLE api_keys ADD COLUMN expires INTEGER');
     db.exec('CREATE TABLE IF NOT EXISTS trial_claims (claim_hash TEXT PRIMARY KEY, key_id INTEGER NOT NULL, expires INTEGER NOT NULL)');
     if (!query("SELECT 1 FROM pragma_table_info('requests') WHERE name='key_id'").get()) {
@@ -57,6 +58,8 @@ export function accounts(db, defaultLimit) {
       CREATE TABLE IF NOT EXISTS subscriptions(sub TEXT PRIMARY KEY,uid INTEGER,customer TEXT,key_id INTEGER,paid_until INTEGER DEFAULT 0,ended INTEGER DEFAULT 0,live INTEGER,last_paid INTEGER DEFAULT 0);
       CREATE TABLE IF NOT EXISTS invoices(invoice TEXT PRIMARY KEY,sub TEXT NOT NULL,uid INTEGER NOT NULL,quota INTEGER NOT NULL,amount INTEGER NOT NULL,paid INTEGER NOT NULL,url TEXT,live INTEGER NOT NULL,renewal INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS invoices_owner ON invoices(uid,paid);
+      CREATE TABLE IF NOT EXISTS guest_orders(id TEXT PRIMARY KEY, browser_hash TEXT NOT NULL, session_id TEXT UNIQUE, quota INTEGER NOT NULL, created INTEGER NOT NULL, uid INTEGER, sub TEXT UNIQUE);
+      CREATE TABLE IF NOT EXISTS welcome_mail(sub TEXT PRIMARY KEY, payload TEXT, attempts INTEGER NOT NULL DEFAULT 0, retry_at INTEGER NOT NULL DEFAULT 0, sent INTEGER);
       COMMIT`);
   } catch(e) { db.exec('ROLLBACK'); throw e; }
   const mode=()=>Number(/^(sk|rk)_live_/.test(process.env.STRIPE_SECRET_KEY||''));
@@ -74,21 +77,56 @@ export function accounts(db, defaultLimit) {
     const salt=secret();
     return salt+'.'+(await derive(password,salt,64)).toString('hex');
   }
-  const insertUser=query("INSERT INTO users(username,password,quota,joined_at) VALUES(?,?,?,unixepoch()*1000) ON CONFLICT(username) DO NOTHING");
+  const insertUser=query("INSERT INTO users(username,password,quota,joined_at) VALUES(?,?,?,COALESCE(?,unixepoch()*1000)) ON CONFLICT(username) DO NOTHING");
   function issue(id,quota) {
     const key='kb_'+secret();
     return query('INSERT INTO api_keys(uid,hash,suffix,quota,secret,expires) SELECT id,?,?,?, ?,NULL FROM users WHERE id=? AND disabled=0')
       .run(digest(key),key.slice(-6),quota,protect(key),id).changes ? key : null;
   }
   return {
+    startGuestOrder(browser,quota) {
+      query('DELETE FROM guest_orders WHERE uid IS NULL AND created<?').run(Date.now()-30*24*hour);
+      const id=secret();
+      query('INSERT INTO guest_orders(id,browser_hash,quota,created) VALUES(?,?,?,?)').run(id,digest(browser),quota,Date.now());
+      return id;
+    },
+    bindCheckout(id,checkout) {
+      query('UPDATE guest_orders SET session_id=? WHERE id=?').run(checkout,id);
+    },
+    claimCheckout(browser,checkout) {
+      const order=query('SELECT o.id,o.uid,u.disabled,u.temporary FROM guest_orders o LEFT JOIN users u ON u.id=o.uid WHERE o.browser_hash=? AND o.session_id=? AND o.created>?').get(digest(browser),checkout,Date.now()-2*24*hour);
+      if(!order||order.disabled)return {status:'unavailable'};
+      if(!order.uid)return {status:'pending'};
+      if(!order.temporary)return {status:'unavailable'};
+      const token=this.newSession(order.uid);
+      query("UPDATE guest_orders SET browser_hash='' WHERE id=?").run(order.id);
+      return {status:'ready',token};
+    },
+    async setFirstPassword(uid,password){
+      const hash=await passwordHash(password);
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const changed=query('UPDATE users SET password=?,temporary=0 WHERE id=? AND temporary=1 AND disabled=0').run(hash,uid).changes;
+        if(changed) query('DELETE FROM sessions WHERE uid=?').run(uid);
+        const token=changed?this.newSession(uid):null;
+        db.exec('COMMIT');return token;
+      } catch(e){db.exec('ROLLBACK');throw e;}
+    },
+    nextWelcome(){
+      const row=query('SELECT sub,payload,attempts FROM welcome_mail WHERE sent IS NULL AND retry_at<=? ORDER BY retry_at LIMIT 1').get(Date.now());
+      if(!row)return null;
+      return {sub:row.sub,attempts:row.attempts,message:JSON.parse(reveal(row.payload))};
+    },
+    welcomeSent(sub){query('UPDATE welcome_mail SET payload=NULL,sent=? WHERE sub=?').run(Date.now(),sub);},
+    welcomeFailed(sub,attempts){query('UPDATE welcome_mail SET attempts=attempts+1,retry_at=? WHERE sub=?').run(Date.now()+Math.min(hour,30000*2**Math.min(attempts,7)),sub);},
     async register(username,password) {
-      return insertUser.run(username,await passwordHash(password),defaultLimit).changes;
+      return insertUser.run(username,await passwordHash(password),defaultLimit,Date.now()).changes;
     },
     async createWithKey(username,password,quota) {
       const hash=await passwordHash(password);
       db.exec('BEGIN IMMEDIATE');
       try {
-        const user=insertUser.run(username,hash,defaultLimit);
+        const user=insertUser.run(username,hash,defaultLimit,Date.now());
         const key=user.changes ? issue(user.lastInsertRowid,quota) : null;
         db.exec('COMMIT');return key;
       } catch(e) {db.exec('ROLLBACK');throw e;}
@@ -106,10 +144,10 @@ export function accounts(db, defaultLimit) {
       return token;
     },
     session(token) {
-      const row=query(`SELECT s.uid,s.admin_tag FROM sessions s LEFT JOIN users u ON s.uid=u.id
+      const row=query(`SELECT s.uid,s.admin_tag,u.temporary FROM sessions s LEFT JOIN users u ON s.uid=u.id
         WHERE s.hash=? AND s.expires>? AND (s.uid IS NULL OR u.disabled=0)`).get(digest(token),Date.now());
       if (!row || (row.uid===null && (!adminTag() || row.admin_tag!==adminTag()))) return null;
-      return {uid:row.uid,admin:row.uid===null};
+      return {uid:row.uid,admin:row.uid===null,temporary:Boolean(row.temporary)};
     },
     logout(token) { query('DELETE FROM sessions WHERE hash=?').run(digest(token)); },
     user(id) { const row=query(view+' WHERE id=?').get(Date.now()-hour,id); if(!row) return null; const result=summary(row); result.keys=result.keys.map(k=>({...k,key:reveal(query('SELECT secret FROM api_keys WHERE id=?').get(k.id)?.secret)})); return result; },
@@ -118,15 +156,37 @@ export function accounts(db, defaultLimit) {
     paidInvoice(p){
       db.exec('BEGIN IMMEDIATE');
       try {
-        const u=query('SELECT disabled FROM users WHERE id=?').get(p.uid);
         const old=query('SELECT * FROM subscriptions WHERE sub=?').get(p.sub);
+        let temporaryPassword;
+        if(p.guest){
+          const order=query('SELECT * FROM guest_orders WHERE id=?').get(p.guest);
+          if(!order || (order.sub && order.sub!==p.sub))throw Error('Unknown guest order');
+          if(!order.uid){
+            if(old?.ended || p.end<=Date.now()){db.exec('COMMIT');return;}
+            if(order.quota!==p.quota||!p.email)throw Error('Incomplete guest invoice');
+            const username='member_'+randomBytes(6).toString('hex');
+            temporaryPassword=randomBytes(18).toString('base64url');
+            const salt=secret(), hash=salt+'.'+scryptSync(temporaryPassword,salt,64).toString('hex');
+            p.uid=Number(insertUser.run(username,hash,defaultLimit,Date.now()).lastInsertRowid);
+            query('UPDATE users SET temporary=1 WHERE id=?').run(p.uid);
+            query('UPDATE guest_orders SET uid=?,sub=? WHERE id=?').run(p.uid,p.sub,p.guest);
+          } else p.uid=order.uid;
+        }
+        const u=query('SELECT username,disabled FROM users WHERE id=?').get(p.uid);
         if(!u||(old?.uid&&old.uid!==p.uid))throw Error('Invoice account mismatch');
         const added=query('INSERT OR IGNORE INTO invoices VALUES(?,?,?,?,?,?,?,?,?)')
           .run(p.invoice,p.sub,p.uid,p.quota,p.amount,p.paid,p.url,p.live,p.renewal).changes;
         const current=!old || p.end>old.paid_until || (p.end===old.paid_until&&p.paid>=old.last_paid);
         if(added&&!old?.ended&&!u.disabled&&current&&p.end>Date.now()){
           let keyId=old?.key_id;
-          if(!old){const key=issue(p.uid,p.quota);keyId=query('SELECT id FROM api_keys WHERE hash=?').get(digest(key)).id;}
+          if(!old){
+            const key=issue(p.uid,p.quota);
+            keyId=query('SELECT id FROM api_keys WHERE hash=?').get(digest(key)).id;
+            if(p.email){
+              const payload=protect(JSON.stringify({email:p.email,username:u.username,temporaryPassword,key,quota:p.quota}));
+              query('INSERT INTO welcome_mail(sub,payload) VALUES(?,?)').run(p.sub,payload);
+            }
+          }
           query('UPDATE api_keys SET expires=?,quota=? WHERE id=? AND uid=?').run(p.end,p.quota,keyId,p.uid);
           query('INSERT INTO subscriptions(sub,uid,customer,key_id,paid_until,live,last_paid) VALUES(?,?,?,?,?,?,?) ON CONFLICT(sub) DO UPDATE SET paid_until=excluded.paid_until,last_paid=excluded.last_paid')
             .run(p.sub,p.uid,p.customer,keyId,p.end,p.live,p.paid);
@@ -154,7 +214,7 @@ export function accounts(db, defaultLimit) {
         query('DELETE FROM trial_claims WHERE expires<=?').run(now);
         if(query('SELECT 1 FROM trial_claims WHERE claim_hash=?').get(claimHash)) { db.exec('ROLLBACK'); return null; }
         const username='trial_'+randomBytes(10).toString('hex');
-        const user=insertUser.run(username,hash,defaultLimit);
+        const user=insertUser.run(username,hash,defaultLimit,Date.now());
         const key='kb_'+secret();
         const result=query('INSERT INTO api_keys(uid,hash,suffix,quota,secret,expires) VALUES(?,?,?,?,?,?)').run(user.lastInsertRowid,digest(key),key.slice(-6),750,protect(key),expires);
         query('UPDATE users SET trial_until=? WHERE id=?').run(expires,user.lastInsertRowid);

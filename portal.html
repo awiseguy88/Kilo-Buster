@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Kilo Buster Cloud</title>
-<link rel="stylesheet" href="theme.css"><script defer src="theme.js"></script>
+<link rel="stylesheet" href="theme.css"><link rel="stylesheet" href="cloud.css"><script defer src="theme.js"></script>
 <style>
 :root{--portal-art:url('/portal/art.png')}
 :root{color-scheme:dark;font:16px/1.5 Inter,"Segoe UI",system-ui,sans-serif;color:#ebeff7;background:#0b0e15}
@@ -40,6 +40,7 @@ a,#message{color:var(--accent)}:root[data-theme="light"] a,:root[data-theme="lig
 const $=id=>document.getElementById(id), path=location.pathname;
 if(location.protocol==='file:') document.documentElement.style.setProperty('--portal-art','url("./assets/Kilo Buster_ Breaking Network Chains.png")');
 const content=$('content'), nav=$('nav');
+document.body.classList.add(path==='/admin'?'admin-auth':path.startsWith('/admin')?'admin-view':'portal-view');
 function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n}
 function link(parent,label,href){const n=el('a',label);n.href=href;parent.append(n)}
 function message(text){$('message').textContent=text}
@@ -112,6 +113,23 @@ function guide(){
   for(const [name,code] of examples){const block=el('div',undefined,'row');block.append(el('strong',name));const pre=el('pre');pre.textContent=code;block.append(pre);button(block,'Copy example',async()=>{await navigator.clipboard.writeText(code);message('Example copied.')},true);steps.append(block)}
   steps.append(el('p','Use a custom provider that supports OpenAI Chat Completions. Clients that require Anthropic Messages, including Claude Code in its native configuration, need a protocol adapter.'));
 }
+async function welcome(){
+  $('title').textContent='Your account is ready';
+  link(nav,'Setup guide','/setup');link(nav,'Sign in','/login');
+  const box=el('section',undefined,'panel password-setup');content.append(box);
+  const checkout=new URLSearchParams(location.search).get('checkout');
+  if(!checkout){box.append(el('h2','Payment received'),el('p','Your secure account link is missing. Use the sign-in link from your purchase email or contact support.'));return;}
+  const status=el('p','Preparing your account…');box.append(status);
+  try{
+    const result=await api('/portal/checkout-return',{checkout});
+    if(result.status==='pending'){status.textContent='Payment is still being confirmed. Refresh this page in a moment.';return;}
+    if(result.status!=='ready'){status.textContent='This account link has expired. Use the sign-in link from your purchase email.';return;}
+    box.replaceChildren(el('h2','Set your dashboard password'),el('p','Choose a password with at least 10 characters. Your API key and endpoint are in the purchase email.'),status);
+    const form=el('form'),pass=field(form,'New password','password','new-password');pass.minLength=10;pass.maxLength=256;
+    const confirm=field(form,'Confirm password','password','new-password'),submit=el('button','Save password');form.append(submit);box.append(form);
+    form.onsubmit=async event=>{event.preventDefault();if(pass.value!==confirm.value){status.textContent='Passwords do not match.';return;}submit.disabled=true;try{await api('/portal/password',{password:pass.value});location.replace('/account')}catch(error){status.textContent=error.message;submit.disabled=false}};
+  }catch(error){status.textContent=error.message}
+}
 async function account(){
   const u=await api('/portal/me');content.replaceChildren();$('title').textContent=u.username;if(new URLSearchParams(location.search).get('billing')==='success')message('Welcome back from Checkout. Your current keys and limits are shown below.');
   metrics(content,[['Requests left this hour',u.remaining],['Used in last 60 min',u.used],['Hourly limit',u.quota],['Lifetime requests',u.total]]);
@@ -179,6 +197,7 @@ async function admins(){
 }
 function limitInput(parent,label,value){const input=field(parent,label,'number');input.min=0;input.max=1000000;input.value=value;return input}
 if(path==='/setup')guide();
+else if(path==='/welcome')welcome();
 else if(path==='/account'){signOut();account().catch(e=>message(e.message));setInterval(()=>{if(!document.hidden&&!$('upgrade').open)account().catch(e=>message(e.message))},15000)}
 else if(path==='/admin/users'){$('title').textContent='Accounts and allocation';link(nav,'Proxy dashboard','/dashboard');signOut();admins().catch(e=>message(e.message));button(nav,'Refresh',admins,true)}
 else auth();

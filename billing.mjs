@@ -8,14 +8,15 @@ export function applyStripeEvent(event,store,env=process.env){
   if(event.type!=='invoice.paid'||item.status!=='paid'||item.currency!=='usd')return;
   const details=item.parent?.subscription_details||item.subscription_details;
   const uid=Number(details?.metadata?.uid), sub=details?.subscription||item.subscription;
-  if(!uid||!Number.isSafeInteger(uid)||typeof sub!=='string'||!item.id)return;
+  const guest=details?.metadata?.guest_order;
+  if((!guest && (!uid||!Number.isSafeInteger(uid)))||typeof sub!=='string'||!item.id)return;
   const plans=[2500,5000,7500,10000];
   const matches=(item.lines?.data||[]).filter(line=>!(line.amount<0)).map(line=>{
     const price=line.pricing?.price_details?.price||line.price?.id;
     return {quota:price&&plans.find(n=>env['STRIPE_PRICE_'+n]===price),end:line.period?.end};
   }).filter(x=>x.quota&&Number.isSafeInteger(x.end));
   if(matches.length!==1||!Number.isSafeInteger(item.amount_paid)||item.amount_paid<0)return;
-  store.paidInvoice({uid,sub,customer:item.customer,invoice:item.id,quota:matches[0].quota,end:matches[0].end*1000,
+  store.paidInvoice({uid,guest,email:item.customer_email,sub,customer:item.customer,invoice:item.id,quota:matches[0].quota,end:matches[0].end*1000,
     amount:item.amount_paid,paid:(item.status_transitions?.paid_at||event.created)*1000,
     url:item.hosted_invoice_url||null,live:Number(live),renewal:Number(item.billing_reason==='subscription_cycle')});
 }
