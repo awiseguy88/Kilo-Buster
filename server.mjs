@@ -182,7 +182,7 @@ async function handler(req, res) {
     res.writeHead(200,{'content-type':file.endsWith('.css')?'text/css':'text/javascript'});
     return res.end(await readFile(join(ROOT,file)));
   }
-  if (['/','/admin','/account','/admin/users','/login','/register'].includes(path) || path.startsWith('/portal/')) {
+  if (['/','/admin','/account','/admin/users','/login','/register','/setup'].includes(path) || path.startsWith('/portal/')) {
     return portal(req,res,path,store,readJson,json);
   }
   const adminRoute=['/dashboard','/api/proxies/import','/health/stats','/admin/allocation'].includes(path);
