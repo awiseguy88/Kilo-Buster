@@ -22,17 +22,52 @@ export function accounts(db, defaultLimit) {
     CREATE INDEX IF NOT EXISTS requests_expiry ON requests(at);
   `);
   const query = sql => db.prepare(sql);
-  const lookup = query('SELECT id, disabled, quota FROM users WHERE key_hash=? AND disabled=0');
-  const view = `SELECT id,username,quota,disabled,suffix,total,input,output,
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS api_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER NOT NULL REFERENCES users(id),
+      hash TEXT NOT NULL UNIQUE, suffix TEXT NOT NULL, quota INTEGER NOT NULL CHECK(quota>=0));
+      CREATE INDEX IF NOT EXISTS keys_owner ON api_keys(uid);`);
+    if (!query("SELECT 1 FROM pragma_table_info('requests') WHERE name='key_id'").get()) {
+      db.exec(`ALTER TABLE requests ADD COLUMN key_id INTEGER;
+        INSERT INTO api_keys(uid,hash,suffix,quota) SELECT id,key_hash,suffix,quota FROM users WHERE key_hash IS NOT NULL AND disabled=0;
+        UPDATE requests SET key_id=(SELECT id FROM api_keys WHERE uid=requests.uid);
+        UPDATE users SET key_hash=NULL,suffix=NULL;`);
+    }
+    db.exec('CREATE INDEX IF NOT EXISTS key_window ON requests(key_id,at); COMMIT');
+  } catch(e) { db.exec('ROLLBACK'); throw e; }
+  const lookup = query('SELECT u.id,k.id AS key_id,k.quota FROM api_keys k JOIN users u ON u.id=k.uid WHERE k.hash=? AND u.disabled=0');
+  const view = `SELECT id,username,disabled,total,input,output,
     (SELECT count(*) FROM requests r WHERE r.uid=u.id AND r.at>?) AS used FROM users u`;
-  const summary = row => ({...row, remaining: Math.max(0,row.quota-row.used)});
+  const keyRows=query(`SELECT k.id,k.suffix,k.quota,count(r.at) AS used FROM api_keys k
+    LEFT JOIN requests r ON r.key_id=k.id AND r.at>? WHERE k.uid=? GROUP BY k.id ORDER BY k.id`);
+  const summary = row => {
+    const keys=keyRows.all(Date.now()-hour,row.id).map(k=>({...k,remaining:Math.max(0,k.quota-k.used)}));
+    return {...row,keys,quota:keys.reduce((n,k)=>n+k.quota,0),remaining:keys.reduce((n,k)=>n+k.remaining,0)};
+  };
   const adminTag = () => process.env.ADMIN_PASSWORD ? digest(process.env.ADMIN_PASSWORD) : '';
+  async function passwordHash(password) {
+    const salt=secret();
+    return salt+'.'+(await derive(password,salt,64)).toString('hex');
+  }
+  const insertUser=query('INSERT INTO users(username,password,quota) VALUES(?,?,?) ON CONFLICT(username) DO NOTHING');
+  function issue(id,quota) {
+    const key='kb_'+secret();
+    return query('INSERT INTO api_keys(uid,hash,suffix,quota) SELECT id,?,?,? FROM users WHERE id=? AND disabled=0')
+      .run(digest(key),key.slice(-6),quota,id).changes ? key : null;
+  }
   return {
     async register(username,password) {
-      const salt=secret();
-      const hash=(await derive(password,salt,64)).toString('hex');
-      return query('INSERT INTO users(username,password,quota) VALUES(?,?,?) ON CONFLICT(username) DO NOTHING')
-        .run(username,salt+'.'+hash,defaultLimit).changes;
+      return insertUser.run(username,await passwordHash(password),defaultLimit).changes;
+    },
+    async createWithKey(username,password,quota) {
+      const hash=await passwordHash(password);
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const user=insertUser.run(username,hash,defaultLimit);
+        const key=user.changes ? issue(user.lastInsertRowid,quota) : null;
+        db.exec('COMMIT');return key;
+      } catch(e) {db.exec('ROLLBACK');throw e;}
     },
     async login(username,password) {
       const user=query('SELECT id,password,disabled FROM users WHERE username=?').get(username);
@@ -55,21 +90,21 @@ export function accounts(db, defaultLimit) {
     logout(token) { query('DELETE FROM sessions WHERE hash=?').run(digest(token)); },
     user(id) { const row=query(view+' WHERE id=?').get(Date.now()-hour,id); return row && summary(row); },
     list() { return query(view+' ORDER BY username').all(Date.now()-hour).map(summary); },
-    setQuota(id,n) { query('UPDATE users SET quota=? WHERE id=?').run(n,id); },
+    defaultLimit,
+    assigned() { return query('SELECT COALESCE(SUM(k.quota),0) AS n FROM api_keys k JOIN users u ON u.id=k.uid WHERE u.disabled=0').get().n; },
+    setKeyQuota(id,n) { return query('UPDATE api_keys SET quota=? WHERE id=?').run(n,id).changes; },
+    deleteKey(id) { return query('DELETE FROM api_keys WHERE id=?').run(id).changes; },
     revoke(id) {
       db.exec('BEGIN IMMEDIATE');
       try {
-        query('UPDATE users SET disabled=1,key_hash=NULL,suffix=NULL WHERE id=?').run(id);
+        query('UPDATE users SET disabled=1 WHERE id=?').run(id);
+        query('DELETE FROM api_keys WHERE uid=?').run(id);
         query('DELETE FROM sessions WHERE uid=?').run(id);
         db.exec('COMMIT');
       } catch(e) { db.exec('ROLLBACK'); throw e; }
     },
     enable(id) { query('UPDATE users SET disabled=0 WHERE id=?').run(id); },
-    issue(id) {
-      const key='kb_'+secret();
-      return query('UPDATE users SET key_hash=?,suffix=? WHERE id=? AND disabled=0')
-        .run(digest(key),key.slice(-6),id).changes ? key : null;
-    },
+    issue,
     byKey(key) { return lookup.get(digest(key)); },
     reserve(key,now=Date.now()) {
       db.exec('BEGIN IMMEDIATE');
@@ -78,10 +113,10 @@ export function accounts(db, defaultLimit) {
         const user=lookup.get(digest(key));
         let status=401;
         if(user) {
-          const {used}=query('SELECT count(*) AS used FROM requests WHERE uid=?').get(user.id);
+          const {used}=query('SELECT count(*) AS used FROM requests WHERE key_id=?').get(user.key_id);
           status=used>=user.quota ? 429 : 200;
           if(status===200) {
-            query('INSERT INTO requests VALUES(?,?)').run(user.id,now);
+            query('INSERT INTO requests(uid,at,key_id) VALUES(?,?,?)').run(user.id,now,user.key_id);
             query('UPDATE users SET total=total+1 WHERE id=?').run(user.id);
           }
         }
