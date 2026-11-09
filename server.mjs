@@ -173,7 +173,7 @@ async function handler(req, res) {
     const raw=await readRaw(req); if(!stripeSignatureValid(raw,req.headers['stripe-signature'],process.env.STRIPE_WEBHOOK_SECRET)) return json(res,400,{error:{message:'Invalid Stripe signature.'}});
     let event;try{event=JSON.parse(raw)}catch{return json(res,400,{error:{message:'Invalid webhook payload.'}})}
     if(event.type==='checkout.session.completed' || event.type==='customer.subscription.updated' || event.type==='customer.subscription.deleted') {
-      const object=event.data.object, meta=object.metadata||object.subscription_details?.metadata||{}; const uid=Number(meta.uid), quota=event.type==='customer.subscription.deleted'?store.defaultLimit:Number(meta.quota); if(Number.isSafeInteger(uid)&&Number.isSafeInteger(quota)&&quota>0) store.setUserQuota(uid,quota);
+      const object=event.data.object, meta=object.metadata||object.subscription_details?.metadata||{}; const uid=Number(meta.uid), quota=Number(meta.quota); if(Number.isSafeInteger(uid)&&Number.isSafeInteger(quota)&&quota>0) store.recordPayment(event.id,uid,quota,object.amount_total||object.items?.data?.[0]?.price?.unit_amount,'usd');
     }
     return json(res,200,{received:true});
   }
