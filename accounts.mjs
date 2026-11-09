@@ -215,7 +215,7 @@ export function accounts(db, defaultLimit) {
     },
     billing(uid,live){
       return {subscription:query('SELECT customer,paid_until FROM subscriptions WHERE uid=? AND live=? AND ended=0 ORDER BY paid_until DESC LIMIT 1').get(uid,live),
-        invoices:query('SELECT amount,paid,url,quota FROM invoices WHERE uid=? AND live=? ORDER BY paid DESC LIMIT 20').all(uid,live)};
+        invoices:query('SELECT amount,paid,url,quota,renewal FROM invoices WHERE uid=? AND live=? ORDER BY paid DESC').all(uid,live)};
     },
     async createTrial(claim) {
       const claimHash=digest(claim), now=Date.now(), expires=now+3*24*hour;
