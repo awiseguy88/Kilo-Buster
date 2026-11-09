@@ -1,4 +1,6 @@
 import http from 'node:http';
+import { publicPage } from './public-site.mjs';
+import { applyStripeEvent } from './billing.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -163,18 +165,27 @@ async function readJson(req,limit=4*1024*1024) {
   return JSON.parse(Buffer.concat(chunks).toString());
 }
 async function readRaw(req,limit=2*1024*1024) { const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>limit)throw Error('Body too large');chunks.push(Buffer.from(chunk));}return Buffer.concat(chunks); }
-function stripeSignatureValid(raw,header,secret){ if(!header||!secret)return false;const values=Object.fromEntries(header.split(',').map(x=>x.split('=')));const expected=createHmac('sha256',secret).update(`${values.t}.${raw.toString()}`).digest('hex');try{return timingSafeEqual(Buffer.from(expected),Buffer.from(values.v1||''));}catch{return false;} }
+function stripeSignatureValid(raw,header,secret){
+  if(typeof header!=='string'||!secret)return false;
+  const fields=header.split(',').map(s=>s.trim().split('='));
+  const stamp=fields.find(([k])=>k==='t')?.[1];
+  if(!/^\d+$/.test(stamp)||Math.abs(Date.now()/1000-Number(stamp))>300)return false;
+  const signature=createHmac('sha256',secret).update(stamp+'.').update(raw).digest();
+  return fields.some(([k,v])=>k==='v1'&&/^[a-f0-9]{64}$/i.test(v)&&timingSafeEqual(signature,Buffer.from(v,'hex')));
+}
 async function handler(req, res) {
   const requestUrl = new URL(req.url,'http://localhost'), path = requestUrl.pathname;
   res.setHeader('cache-control','no-store');
   res.setHeader('referrer-policy','no-referrer');
   res.setHeader('x-frame-options','DENY');
+  if(req.method==='GET' && ['/', '/pricing'].includes(path)){
+    res.writeHead(200,{'content-type':'text/html; charset=utf-8'});
+    return res.end(publicPage(path));
+  }
   if(path==='/stripe/webhook' && req.method==='POST') {
     const raw=await readRaw(req); if(!stripeSignatureValid(raw,req.headers['stripe-signature'],process.env.STRIPE_WEBHOOK_SECRET)) return json(res,400,{error:{message:'Invalid Stripe signature.'}});
     let event;try{event=JSON.parse(raw)}catch{return json(res,400,{error:{message:'Invalid webhook payload.'}})}
-    if(event.type==='checkout.session.completed' || event.type==='customer.subscription.updated' || event.type==='customer.subscription.deleted') {
-      const object=event.data.object, meta=object.metadata||object.subscription_details?.metadata||{}; const uid=Number(meta.uid), quota=Number(meta.quota); if(Number.isSafeInteger(uid)&&Number.isSafeInteger(quota)&&quota>0) store.recordPayment(event.id,uid,quota,object.amount_total||object.items?.data?.[0]?.price?.unit_amount,'usd');
-    }
+    applyStripeEvent(event,store);
     return json(res,200,{received:true});
   }
   if(req.method==='GET' && /^\/(?:admin\/)?theme\.(css|js)$/.test(path)){

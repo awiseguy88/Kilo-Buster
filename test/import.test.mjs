@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
+import { createHmac } from 'node:crypto';
 
 test('hosted users, limits, proxy imports, admin allocation and revocation', async ()=>{
   const dir=await mkdtemp(join(tmpdir(),'kb-hosted-'));
@@ -95,6 +96,24 @@ test('hosted users, limits, proxy imports, admin allocation and revocation', asy
     await call(base+'enable',{},admin);
     assert.equal((await chat(rotated)).status,401);
     assert.equal((await call('/portal/login',identity)).status,200);
+    const trial=await call('/portal/trial',{}), trialHeaders={cookie:trial.headers.get('set-cookie').split(';')[0]};
+    const trialKey=(await trial.json()).key;
+    assert.match(trialKey,/^kb_/);
+    assert.equal((await (await call('/portal/trial/current',undefined,trialHeaders)).json()).key,trialKey);
+    assert.equal((await (await call('/portal/trial',{},trialHeaders)).json()).key,trialKey);
+    assert.deepEqual(await (await call('/portal/trial/current')).json(),{});
+    Object.assign(process.env,{STRIPE_WEBHOOK_SECRET:'webhook-fixture',STRIPE_PRICE_2500:'price_fixture',STRIPE_SECRET_KEY:'sk_test_fixture'});
+    const buyer=await call('/portal/register',{username:'subscriber',password:'private-test-pass'});
+    const auth={cookie:buyer.headers.get('set-cookie').split(';')[0]};
+    const uid=(await (await call('/portal/me',undefined,auth)).json()).id, now=Math.floor(Date.now()/1000);
+    const event={type:'invoice.paid',created:now,livemode:false,data:{object:{id:'in_http',status:'paid',currency:'usd',amount_paid:799,customer:'cus_http',
+      parent:{subscription_details:{subscription:'sub_http',metadata:{uid:String(uid)}}},lines:{data:[{amount:799,price:{id:'price_fixture'},period:{end:now+86400}}]}}}};
+    const sig=createHmac('sha256',process.env.STRIPE_WEBHOOK_SECRET).update(now+'.'+JSON.stringify(event)).digest('hex');
+    assert.equal((await call('/stripe/webhook',event)).status,400);
+    assert.equal((await call('/stripe/webhook',event,{'stripe-signature':'t='+now+',v1='+sig})).status,200);
+    const account=await (await call('/portal/me',undefined,auth)).json();
+    assert.equal(account.keys.length,1);assert.equal(account.keys[0].quota,2500);assert.equal(account.invoices[0].amount,799);
+    assert.equal((await (await call('/portal/sales',undefined,admin)).json()).total.cents,799);
   } finally {
     globalThis.fetch=realFetch;
     await new Promise(done=>server.close(done));

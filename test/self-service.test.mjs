@@ -1,0 +1,40 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
+import {accounts} from '../accounts.mjs';
+import {applyStripeEvent} from '../billing.mjs';
+import {publicPage} from '../public-site.mjs';
+
+test('public content exposes the trial, model and four prices without JavaScript',()=>{
+  for(const route of ['/','/pricing']){
+    const html=publicPage(route);
+    for(const price of ['7.99','12.99','19.99','29.99'])assert.ok(html.includes('$'+price));
+    assert.match(html,/href="\/setup"/);assert.match(html,/href="\/register"/);
+  }
+});
+
+test('only a paid, matching invoice grants a single expiring key; retries, renewals and cancellation',async()=>{
+  process.env.STRIPE_SECRET_KEY='sk_test_fixture';
+  const env={STRIPE_SECRET_KEY:'sk_test_fixture',STRIPE_PRICE_2500:'price_fixture'};
+  const db=new DatabaseSync(':memory:'),s=accounts(db,30);
+  try{
+    await s.register('member','a-test-password');
+    const end=Math.floor(Date.now()/1000)+86400;
+    const invoice={id:'in_first',status:'paid',currency:'usd',customer:'cus_test',amount_paid:799,billing_reason:'subscription_create',
+      parent:{subscription_details:{subscription:'sub_test',metadata:{uid:'1'}}},
+      lines:{data:[{pricing:{price_details:{price:'price_fixture'}},period:{end}}]}};
+    const pay=(obj,override={})=>applyStripeEvent({created:end-86400,livemode:false,type:'invoice.paid',data:{object:obj},...override},s,env);
+    pay({...invoice,status:'open'});pay(invoice,{livemode:true});pay({...invoice,lines:{data:[]}});
+    assert.equal(s.user(1).keys.length,0);
+    pay(invoice);pay(invoice);
+    const key=s.user(1).keys[0].key;
+    assert.equal(s.byKey(key).quota,2500);assert.equal(s.user(1).keys.length,1);
+    assert.equal(s.salesStats().total.cents,799);
+    pay({...invoice,id:'in_next',billing_reason:'subscription_cycle',lines:{data:[{price:{id:'price_fixture'},period:{end:end+86400}}]}});
+    assert.equal(s.user(1).keys[0].key,key);assert.equal(s.salesStats().customers[0].renewals,1);
+    assert.equal(s.billing(1,0).invoices.length,2);
+    assert.equal(s.reserve(key,(end+86400)*1000),401);
+    applyStripeEvent({type:'customer.subscription.deleted',livemode:false,data:{object:{id:'sub_test'}}},s,env);
+    pay(invoice);assert.equal(s.byKey(key),undefined);
+  }finally{db.close();}
+});
