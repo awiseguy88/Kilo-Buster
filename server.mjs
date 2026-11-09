@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { publicPage } from './public-site.mjs';
 import { applyStripeEvent } from './billing.mjs';
+import { welcomeMailer } from './welcome.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -17,7 +18,6 @@ const STATE_FILE = process.env.PROXY_STATE_FILE || join(process.env.RAILWAY_VOLU
 const PROXY_SOURCE = 'https://aaronwiseai.com/aidocs/prox.txt';
 let importing = false;
 let proxies = [], saveTimer = null;
-let batchProxy, batchRemaining = 0;
 const agents = new Map();
 const HOUR = 60 * 60 * 1000;
 const requestedLimit = Number(process.env.PROXY_REQUESTS_PER_HOUR ?? 149);
@@ -26,6 +26,8 @@ const MAX_PER_HOUR = Math.min(149, requestedLimit);
 const BACKOFF_BASE = Number(process.env.PROXY_BACKOFF_SECONDS || 5) * 1000;
 const tokenDb = new DatabaseSync(STATE_FILE + '.tokens.sqlite');
 const store = accounts(tokenDb,Number(process.env.DEFAULT_REQUESTS_PER_HOUR ?? 30));
+const deliverWelcome = welcomeMailer(store);
+if(process.env.KILO_BUSTER_TEST !== '1') setInterval(deliverWelcome,30000).unref();
 tokenDb.exec('CREATE TABLE IF NOT EXISTS totals (id INTEGER PRIMARY KEY, input INTEGER NOT NULL, output INTEGER NOT NULL); INSERT OR IGNORE INTO totals VALUES (1,0,0)');
 const addUsage = tokenDb.prepare('UPDATE totals SET input=input+?, output=output+? WHERE id=1');
 const getUsage = tokenDb.prepare('SELECT input, output FROM totals WHERE id=1');
@@ -123,28 +125,20 @@ function available(proxy, now = Date.now()) { prune(proxy, now); return proxy.ba
 function proxyStats(proxy) { const now = Date.now(); prune(proxy, now); return { id: proxy.id, active: proxy.active, latencyMs: proxy.latencyMs || null, address: `${proxy.url.hostname}:${proxy.url.port || 80}`, requestsLastHour: proxy.requests.length, remaining: Math.max(0, MAX_PER_HOUR - proxy.requests.length), successes: proxy.successes, failures: proxy.failures, consecutiveFailures: proxy.consecutiveFailures, backoffSeconds: Math.max(0, Math.ceil((proxy.backoffUntil - now) / 1000)), lastError: proxy.lastError, lastUsed: proxy.lastUsed ? new Date(proxy.lastUsed).toISOString() : null }; }
 function pickProxy() {
   const now = Date.now();
-  let next, current;
-  let lowestLoad = Infinity;
+  let selected = null;
+  let bestScore = Infinity;
   for (const proxy of proxies) {
-    if (proxy.backoffUntil > now) continue;
-    if (proxy.requests.length >= MAX_PER_HOUR && !available(proxy, now)) continue;
-    if (proxy.active > lowestLoad) continue;
-    if (proxy.active < lowestLoad) {
-      lowestLoad = proxy.active;
-      next = current = undefined;
+    if (!available(proxy, now)) continue;
+    // Keep connections pooled, but choose a healthy proxy per request so
+    // slow or saturated endpoints cannot hold an entire request batch.
+    const score = proxy.active * 1000000 + (proxy.latencyMs || 5000);
+    if (score < bestScore || (score === bestScore && proxy.lastUsed < (selected?.lastUsed || Infinity))) {
+      bestScore = score;
+      selected = proxy;
     }
-    if (proxy === batchProxy) current = proxy;
-    else if (!next || proxy.lastUsed < next.lastUsed ||
-      (proxy.lastUsed === next.lastUsed && (proxy.latencyMs || Infinity) < (next.latencyMs || Infinity))) next = proxy;
   }
-  const selected = current && batchRemaining > 0 ? current : next || current;
   if (!selected) return null;
   if (!reserveAttempt(selected, now)) return pickProxy();
-  if (selected !== batchProxy || batchRemaining === 0) {
-    batchProxy = selected;
-    batchRemaining = 25 + Math.floor(Math.random() * 6);
-  }
-  batchRemaining--;
   prune(selected, now);
   selected.active++;
   selected.lastUsed = now;
@@ -178,6 +172,11 @@ async function handler(req, res) {
   res.setHeader('cache-control','no-store');
   res.setHeader('referrer-policy','no-referrer');
   res.setHeader('x-frame-options','DENY');
+  if(req.method==='GET' && (path==='/cloud.css'||path==='/portal/cover.jpg')){
+    const css=path==='/cloud.css';
+    res.writeHead(200,{'content-type':css?'text/css':'image/jpeg','cache-control':'public, max-age=300'});
+    return res.end(await readFile(join(ROOT,css?'cloud.css':'assets/KiloBuster-Social.jpg')));
+  }
   if(req.method==='GET' && ['/', '/pricing'].includes(path)){
     res.writeHead(200,{'content-type':'text/html; charset=utf-8'});
     return res.end(publicPage(path));
@@ -186,6 +185,7 @@ async function handler(req, res) {
     const raw=await readRaw(req); if(!stripeSignatureValid(raw,req.headers['stripe-signature'],process.env.STRIPE_WEBHOOK_SECRET)) return json(res,400,{error:{message:'Invalid Stripe signature.'}});
     let event;try{event=JSON.parse(raw)}catch{return json(res,400,{error:{message:'Invalid webhook payload.'}})}
     applyStripeEvent(event,store);
+    void deliverWelcome();
     return json(res,200,{received:true});
   }
   if(req.method==='GET' && /^\/(?:admin\/)?theme\.(css|js)$/.test(path)){
@@ -193,7 +193,7 @@ async function handler(req, res) {
     res.writeHead(200,{'content-type':file.endsWith('.css')?'text/css':'text/javascript'});
     return res.end(await readFile(join(ROOT,file)));
   }
-  if (['/','/admin','/account','/admin/users','/login','/register','/setup'].includes(path) || path.startsWith('/portal/')) {
+  if (['/','/admin','/account','/admin/users','/login','/register','/setup','/welcome'].includes(path) || path.startsWith('/portal/')) {
     return portal(req,res,path,store,readJson,json);
   }
   const adminRoute=['/dashboard','/api/proxies/import','/health/stats','/admin/allocation'].includes(path);
@@ -231,7 +231,7 @@ async function handler(req, res) {
   if (!proxies.some(p=>available(p))) return json(res,429,{error:{message:'No proxy capacity available.',type:'rate_limit_error'}});
   const admission=store.reserve(key);
   if(admission!==200) return json(res,admission,{error:admission===429
-    ? {message:'This API key has reached its rolling hourly request limit.',type:'rate_limit_error'}
+      ? {message:'This API key has reached its rolling hourly request limit. Upgrade your plan at https://kilo-buster-production.up.railway.app/pricing',type:'rate_limit_error',upgrade_url:'https://kilo-buster-production.up.railway.app/pricing'}
     : {message:'Invalid or revoked API key.',type:'authentication_error'}});
   let last; const attempts = Math.min(proxies.length, Number(process.env.PROXY_RETRIES || 3));
   for (let i=0; i<attempts; i++) { const proxy = pickProxy(); if (!proxy) return json(res, 429, { error: { message: 'All proxies are at their hourly quota or cooling down.', type: 'rate_limit_error' } }); const controller = new AbortController();
