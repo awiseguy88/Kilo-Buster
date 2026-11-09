@@ -150,7 +150,10 @@ export async function portal(req,res,path,store,readJson,json) {
     } catch {return fail(502,'Email delivery could not be confirmed. Please try again.');}
   }
   if(path==='/portal/checkout'||path==='/portal/billing-portal') {
-    if((path==='/portal/billing-portal'||session?.admin)&&!session?.uid)return fail(403,'Sign in with a customer account.');
+    // A signed-in administrator should still be able to buy a guest plan from
+    // the public pricing page; only the billing-management action requires a
+    // customer session.
+    if(path==='/portal/billing-portal'&&!session?.uid)return fail(403,'Sign in with a customer account.');
     if(!process.env.STRIPE_SECRET_KEY) return fail(503,'Stripe is not configured yet.');
     const prices={2500:process.env.STRIPE_PRICE_2500,5000:process.env.STRIPE_PRICE_5000,7500:process.env.STRIPE_PRICE_7500,10000:process.env.STRIPE_PRICE_10000};
     const origin=siteOrigin();
