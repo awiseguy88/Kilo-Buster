@@ -172,6 +172,10 @@ async function handler(req, res) {
   res.setHeader('cache-control','no-store');
   res.setHeader('referrer-policy','no-referrer');
   res.setHeader('x-frame-options','DENY');
+  if(req.method==='GET' && path==='/favicon.ico'){
+    res.writeHead(200,{'content-type':'image/x-icon','cache-control':'public, max-age=3600'});
+    return res.end(await readFile(join(ROOT,'assets/KiloBuster.ico')));
+  }
   if(req.method==='GET' && (path==='/cloud.css'||path==='/portal/cover.jpg')){
     const css=path==='/cloud.css';
     res.writeHead(200,{'content-type':css?'text/css':'image/jpeg','cache-control':'public, max-age=300'});
