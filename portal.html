@@ -92,7 +92,7 @@ function metrics(parent,values){
   for(const [label,value] of values){const card=el('div',undefined,'metric panel');card.append(el('small',label),el('strong',Number(value).toLocaleString()));block.append(card)}
 }
 function guide(){
-  $('title').textContent='Setup guide'; link(nav,'Sign in','/login'); link(nav,'Create account','/register');
+  $('title').textContent='Setup guide'; link(nav,'Home','/'); link(nav,'Pricing','/pricing'); link(nav,'Sign in','/login'); link(nav,'Create account','/register');
   const p=el('section',undefined,'panel');content.append(p);p.append(el('h2','Connect any OpenAI-compatible tool'),el('p','Set the base URL to the endpoint below, use your assigned API key, and select the model kilo-auto/free.'),el('h3','Endpoint URL'),el('code',location.origin+'/v1'),el('h3','Model'),el('code','kilo-auto/free'));
   const trial=el('section',undefined,'panel');content.append(trial);
   trial.append(el('h2','Try the service'),el('p','One three-day trial per browser, up to 750 requests per rolling hour.'));
@@ -133,7 +133,7 @@ async function welcome(){
   }catch(error){status.textContent=error.message}
 }
 async function account(){
-  link(nav,'Home','/');link(nav,'Setup guide','/setup');link(nav,'Pricing','/pricing');
+  nav.replaceChildren();link(nav,'Home','/');link(nav,'Setup guide','/setup');link(nav,'Pricing','/pricing');signOut();
   const u=await api('/portal/me');content.replaceChildren();$('title').textContent=u.username;if(new URLSearchParams(location.search).get('billing')==='success')message('Welcome back from Checkout. Your current keys and limits are shown below.');
   metrics(content,[['Requests left this hour',u.remaining],['Used in last 60 min',u.used],['Hourly limit',u.quota],['Lifetime requests',u.total]]);
   const p=el('section',undefined,'panel account-panel');content.append(p);p.append(el('h2','API access'),el('code',location.origin+'/v1'),
@@ -199,9 +199,9 @@ async function admins(){
   }
 }
 function limitInput(parent,label,value){const input=field(parent,label,'number');input.min=0;input.max=1000000;input.value=value;return input}
-if(path==='/setup'){link(nav,'Home','/');link(nav,'Pricing','/pricing');link(nav,'Sign in','/login');link(nav,'Create account','/register');guide();}
+if(path==='/setup')guide();
 else if(path==='/welcome')welcome();
-else if(path==='/account'){signOut();account().catch(e=>message(e.message));setInterval(()=>{if(!document.hidden&&!$('upgrade').open)account().catch(e=>message(e.message))},15000)}
+else if(path==='/account'){account().catch(e=>message(e.message));setInterval(()=>{if(!document.hidden&&!$('upgrade').open)account().catch(e=>message(e.message))},15000)}
 else if(path==='/admin/users'){$('title').textContent='Accounts and allocation';link(nav,'Home','/');link(nav,'Proxy dashboard','/dashboard');link(nav,'Setup guide','/setup');signOut();admins().catch(e=>message(e.message));button(nav,'Refresh',admins,true)}
 else auth();
 </script></body></html>
