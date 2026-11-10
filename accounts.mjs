@@ -88,6 +88,11 @@ export function accounts(db, defaultLimit) {
       .run(digest(key),key.slice(-6),quota,protect(key),id).changes ? key : null;
   }
   return {
+    rotateKey(uid,id){
+      const key='kb_'+secret();
+      const changed=query('UPDATE api_keys SET hash=?,suffix=?,secret=? WHERE id=? AND uid=? AND (expires IS NULL OR expires>?) AND EXISTS(SELECT 1 FROM users WHERE id=? AND disabled=0)').run(digest(key),key.slice(-6),protect(key),id,uid,Date.now(),uid).changes;
+      return changed?key:null;
+    },
     audit(action,target,detail=''){query('INSERT INTO admin_audit(at,action,target,detail) VALUES(?,?,?,?)').run(Date.now(),action,String(target),String(detail));},
     auditLog(){return query('SELECT at,action,target,detail FROM admin_audit ORDER BY id DESC LIMIT 200').all()},
     createAccountTrial(uid){

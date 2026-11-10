@@ -98,6 +98,13 @@ export async function portal(req,res,path,store,readJson,json) {
   let data;
   try {data=await readJson(req,2048);} catch {return fail(400,'Invalid or oversized JSON.');}
   if (!data || typeof data!=='object') return fail(400,'Invalid request.');
+  if(path==='/portal/rotate-key'){
+    if(!session?.uid)return fail(401,'Sign in required.');
+    if(!Number.isSafeInteger(data.id)||data.id<1)return fail(400,'Invalid key.');
+    if(limited('rotate:'+session.uid,5))return fail(429,'Please wait before rotating another key.');
+    const key=store.rotateKey(session.uid,data.id);
+    return key?send({key}):fail(404,'Key not found or expired.');
+  }
   if(path==='/portal/reset-request'){
     if(limited('reset:'+clientIp(req),5))return fail(429,'Please wait before trying again.');
     if(typeof data.email!=='string'||data.email.length>254||!/^\S+@\S+\.\S+$/.test(data.email))return fail(400,'Enter a valid email address.');
