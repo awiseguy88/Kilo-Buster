@@ -92,6 +92,7 @@ export async function portal(req,res,path,store,readJson,json) {
   if(req.method==='GET' && path==='/portal/users') return session?.admin ? send(store.list()) : fail(403,'Admin sign-in required.');
   if(req.method==='GET' && path==='/portal/payments') return session?.admin ? send(store.payments()) : fail(403,'Admin sign-in required.');
   if(req.method==='GET' && path==='/portal/sales') return session?.admin ? send(store.salesStats()) : fail(403,'Admin sign-in required.');
+  if(req.method==='GET' && path==='/portal/audit') return session?.admin ? send(store.auditLog()) : fail(403,'Admin sign-in required.');
   if(req.method!=='POST') return fail(404,'Page not found.');
   if(!browserWrite(req)) return fail(403,'A same-site JSON request is required.');
   let data;
@@ -235,6 +236,7 @@ export async function portal(req,res,path,store,readJson,json) {
     if(typeof password!=='string' || password.length<10 || password.length>256) return fail(400,'Use a password between 10 and 256 characters.');
     if(!validLimit(quota)) return fail(400,'Enter a whole number from 0 to 1,000,000.');
     const key=await store.createWithKey(username,password,quota);
+    if(key)store.audit('create account and key',username,'limit '+quota+'/hour');
     return key ? send({key}) : fail(409,'Username already exists. Use the existing account to add another key.');
   }
   const keyAction=path.match(/^\/portal\/keys\/(\d+)\/(quota|delete)$/);
@@ -243,6 +245,7 @@ export async function portal(req,res,path,store,readJson,json) {
     if(!Number.isSafeInteger(id)) return fail(404,'Key not found.');
     if(keyAction[2]==='quota' && !validLimit(data.quota)) return fail(400,'Enter a whole number from 0 to 1,000,000.');
     const changed=keyAction[2]==='delete' ? store.deleteKey(id) : store.setKeyQuota(id,data.quota);
+    if(changed)store.audit(keyAction[2]==='delete'?'delete key':'change key limit','key #'+id,keyAction[2]==='quota'?'limit '+data.quota+'/hour':'');
     return changed ? send({}) : fail(404,'Key not found.');
   }
   const match=path.match(/^\/portal\/users\/(\d+)\/(key|revoke|enable)$/);
@@ -255,8 +258,10 @@ export async function portal(req,res,path,store,readJson,json) {
     case 'key': {
       if(!validLimit(data.quota)) return fail(400,'Enter a whole number from 0 to 1,000,000.');
       const key=store.issue(id,data.quota);
+      if(key)store.audit('create key','user #'+id,'limit '+data.quota+'/hour');
       return key ? send({key}) : fail(409,'Restore access before generating a key.');
     }
   }
+  store.audit(match[2]==='revoke'?'revoke access':'restore access','user #'+id);
   return send(store.user(id));
 }
