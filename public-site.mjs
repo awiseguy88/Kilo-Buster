@@ -14,6 +14,7 @@ function planCard([name, quota, amount]) {
 }
 
 export function publicPage(path) {
+  const support=/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(process.env.SUPPORT_EMAIL||'')?process.env.SUPPORT_EMAIL:'aaronwise@aaronwiseai.com';
   const pricing = path === '/pricing';
   const hero = `<section class="front-hero"><div><h1>One API for your AI tools.</h1>
     <p>Connect your editor or agent to Kilo’s free model through an OpenAI-compatible endpoint. See requests and tokens in your dashboard.</p>
@@ -36,7 +37,7 @@ export function publicPage(path) {
     <section><h2>Before you buy</h2><details><summary>Can I try the endpoint first?</summary><p>The setup guide offers a three-day trial with up to 750 requests per rolling hour.</p></details>
     <details><summary>Already have a Kilo Buster account?</summary><p>Sign in before buying to add the subscription to your existing account.</p><a href="/login">Sign in</a></details>
     <details><summary>How does the hourly limit work?</summary><p>The limit applies over the previous 60 minutes. Upstream availability can reduce throughput. Service is best effort.</p></details></section>
-    </main><footer>Operated by Aaron Wise AI · Independent of Kilo, OpenAI and Anthropic. <a href="mailto:aaronwise@aaronwiseai.com">Contact support</a> <a href="${repo}" class="github-link">${github} Self-host on GitHub</a></footer>
+    </main><footer>Operated by Aaron Wise AI · Independent of Kilo, OpenAI and Anthropic. <a href="mailto:${encodeURIComponent(support)}">Contact support</a> <a href="${repo}" class="github-link">${github} Self-host on GitHub</a></footer>
     <script>
     const choices = [...document.querySelectorAll('[data-plan]')];
     fetch('/portal/session').then(r=>r.json()).then(session=>{if(!session.signedIn)return;const nav=document.querySelector('header nav');nav.querySelectorAll('a[href="/login"],a[href="/register"]').forEach(a=>a.remove());const account=document.createElement('a');account.href=session.admin?'/dashboard':'/account';account.textContent=session.admin?'Admin dashboard':'My account';nav.append(account);const signout=document.createElement('button');signout.type='button';signout.textContent='Sign out';signout.onclick=async()=>{const r=await fetch('/portal/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(r.ok)location.reload()};nav.append(signout);document.querySelectorAll('details a[href="/login"]').forEach(a=>{a.href=account.href;a.textContent=account.textContent})}).catch(()=>{});

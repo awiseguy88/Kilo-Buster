@@ -10,6 +10,7 @@ const cookie = '__Host-kb_session';
 const trialCookie = '__Host-kb_trial';
 const orderCookie = '__Host-kb_order';
 const cookieOptions = '; Path=/; HttpOnly; SameSite=Strict; Secure';
+const supportEmail=()=>/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(process.env.SUPPORT_EMAIL||'')?process.env.SUPPORT_EMAIL:'aaronwise@aaronwiseai.com';
 const attempts = new Map();
 const cleanup = setInterval(() => {
   for (const [key,bucket] of attempts) if (bucket.until<=Date.now()) attempts.delete(key);
@@ -87,7 +88,7 @@ export async function portal(req,res,path,store,readJson,json) {
   if(req.method==='GET' && path==='/portal/me') {
     if(!session?.uid)return fail(401,'Sign in required.');
     const {subscription,invoices}=store.billing(session.uid,live);
-    return send({...store.user(session.uid),recoveryEmail:store.recoveryEmail(session.uid),temporary:session.temporary,paidUntil:subscription?.paid_until||null,invoices});
+    return send({...store.user(session.uid),supportEmail:supportEmail(),recoveryEmail:store.recoveryEmail(session.uid),temporary:session.temporary,paidUntil:subscription?.paid_until||null,invoices});
   }
   if(req.method==='GET' && path==='/portal/users') return session?.admin ? send(store.list()) : fail(403,'Admin sign-in required.');
   if(req.method==='GET' && path==='/portal/payments') return session?.admin ? send(store.payments()) : fail(403,'Admin sign-in required.');
@@ -202,7 +203,7 @@ export async function portal(req,res,path,store,readJson,json) {
     try {
       const sent=await fetch('https://api.resend.com/emails',{method:'POST',signal:AbortSignal.timeout(10000),
         headers:{'Content-Type':'application/json',Authorization:'Bearer '+process.env.RESEND_API_KEY,'Idempotency-Key':id},
-        body:JSON.stringify({from:process.env.USAGE_EMAIL_FROM,to:['aaronwise@aaronwiseai.com'],reply_to:email,
+        body:JSON.stringify({from:process.env.USAGE_EMAIL_FROM,to:[supportEmail()],reply_to:email,
           subject:'Kilo Buster usage request from '+user.username,
           text:`Account: ${user.username}\nRequested limit: ${rate} requests per hour\nContact: ${email}`})});
       if(!sent.ok || !(await sent.json()).id) throw Error('Delivery failed');
