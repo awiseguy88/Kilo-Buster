@@ -25,3 +25,5 @@ Sign in at `/login` with your assigned username and password. Self-registration 
 Each accepted chat request counts once against its key’s rolling 60-minute limit, including calls that later fail upstream. Internal retries and model discovery do not consume extra requests. Token and lifetime totals remain with the account when a key is deleted. Revoking an account disables sessions and removes all of its keys. Existing keys from the earlier single-key portal retain their limits and rolling usage on upgrade.
 
 The admin allocation panel compares the sum of active key limits with the number of currently available proxies multiplied by the per-proxy hourly limit. It also shows remaining proxy attempts after actual usage. Overassignment is advisory.
+
+Set `SUPPORT_EMAIL` to the address that should receive customer usage requests and problem reports. If omitted, it defaults to `aaronwise@aaronwiseai.com`.
