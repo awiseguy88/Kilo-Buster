@@ -28,6 +28,8 @@ The admin allocation panel compares the sum of active key limits with the number
 
 Set `SUPPORT_EMAIL` to the address that should receive customer usage requests and problem reports. If omitted, it defaults to `aaronwise@aaronwiseai.com`.
 
+Set `ALERT_EMAIL` to receive service alerts using the configured Resend sender. The service checks every five minutes for zero available proxies, welcome emails awaiting retry, and Stripe webhook processing errors; alerts are limited to one per hour per running instance. The administrator page also shows these conditions. Configure an independent uptime monitor against `/healthz`: the application cannot send an alert while it is offline, and a health check only confirms the process responds, not that upstream AI requests succeed.
+
 ### Manual database backup
 
 In **Admin → User access**, select **Download database backup**. The snapshot includes account records, sessions, encrypted keys, subscriptions and usage; store it privately. It does not contain the proxy list, Railway environment variables or your encryption secret. Keep a separate secure copy of `KEY_ENCRYPTION_SECRET` (or the existing `ADMIN_PASSWORD` if no separate secret was configured): encrypted keys cannot be recovered without the original secret.
