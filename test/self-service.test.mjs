@@ -13,6 +13,15 @@ test('public content exposes the trial, model and four prices without JavaScript
   }
 });
 
+test('monitoring alerts have independent 25-minute quiet periods',()=>{
+  const db=new DatabaseSync(':memory:'),s=accounts(db,30);
+  try{const now=2000000000;assert.equal(s.alertDue('no_proxies',now),true);s.alertSent(['no_proxies'],now);
+    assert.equal(s.alertDue('no_proxies',now+25*60000-1),false);
+    assert.equal(s.alertDue('welcome_failed',now+1),true);
+    assert.equal(s.alertDue('no_proxies',now+25*60000),true);
+  }finally{db.close()}
+});
+
 test('password reset requires matching email and username, expires and is single-use',async()=>{
   const db=new DatabaseSync(':memory:'),s=accounts(db,30);
   try{

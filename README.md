@@ -28,7 +28,7 @@ The admin allocation panel compares the sum of active key limits with the number
 
 Set `SUPPORT_EMAIL` to the address that should receive customer usage requests and problem reports. If omitted, it defaults to `aaronwise@aaronwiseai.com`.
 
-Set `ALERT_EMAIL` to receive service alerts using the configured Resend sender. The service checks every five minutes for zero available proxies, welcome emails awaiting retry, and Stripe webhook processing errors; alerts are limited to one per hour per running instance. The administrator page also shows these conditions. Configure an independent uptime monitor against `/healthz`: the application cannot send an alert while it is offline, and a health check only confirms the process responds, not that upstream AI requests succeed.
+Set `ALERT_EMAIL` to receive service alerts using the configured Resend sender. The service checks every five minutes for zero available proxies, welcome emails awaiting retry, and Stripe webhook processing errors. Each alert type has a 25-minute quiet period after successful delivery, stored in the database; different alert types may still be sent. The administrator page also shows these conditions. Configure an independent uptime monitor against `/healthz`: the application cannot send an alert while it is offline, and a health check only confirms the process responds, not that upstream AI requests succeed.
 
 The administrator **Service monitoring** panel can turn monitoring emails on or off immediately. The setting persists in the database and does not disable dashboard indicators or customer emails. An email already being sent may still arrive after disabling alerts.
 

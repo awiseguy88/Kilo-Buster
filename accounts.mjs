@@ -50,6 +50,7 @@ export function accounts(db, defaultLimit) {
     db.exec('CREATE TABLE IF NOT EXISTS admin_audit (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, detail TEXT NOT NULL)');
     db.exec('CREATE TABLE IF NOT EXISTS operational_events (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, kind TEXT NOT NULL)');
     db.exec('CREATE TABLE IF NOT EXISTS service_settings (name TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    db.exec('CREATE TABLE IF NOT EXISTS monitoring_alerts (kind TEXT PRIMARY KEY, last_sent INTEGER NOT NULL)');
     db.exec('CREATE TABLE IF NOT EXISTS account_trials (uid INTEGER PRIMARY KEY, created INTEGER NOT NULL)');
     if (!query("SELECT 1 FROM pragma_table_info('requests') WHERE name='key_id'").get()) {
       db.exec(`ALTER TABLE requests ADD COLUMN key_id INTEGER;
@@ -91,6 +92,8 @@ export function accounts(db, defaultLimit) {
       .run(digest(key),key.slice(-6),quota,protect(key),id).changes ? key : null;
   }
   return {
+    alertDue(kind,now=Date.now()){const last=query('SELECT last_sent FROM monitoring_alerts WHERE kind=?').get(kind);return !last||now-last.last_sent>=25*60*1000},
+    alertSent(kinds,now=Date.now()){const write=query('INSERT INTO monitoring_alerts(kind,last_sent) VALUES(?,?) ON CONFLICT(kind) DO UPDATE SET last_sent=excluded.last_sent');for(const kind of kinds)write.run(kind,now)},
     monitoringEmailEnabled(){return query("SELECT value FROM service_settings WHERE name='monitoring_email'").get()?.value!=='disabled'},
     setMonitoringEmailEnabled(enabled){query("INSERT INTO service_settings(name,value) VALUES('monitoring_email',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value").run(enabled?'enabled':'disabled');this.audit(enabled?'enable monitoring emails':'disable monitoring emails','administrator')},
     operationalEvent(kind){query('INSERT INTO operational_events(at,kind) VALUES(?,?)').run(Date.now(),kind);query('DELETE FROM operational_events WHERE at<?').run(Date.now()-7*24*hour)},
