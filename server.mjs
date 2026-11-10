@@ -210,7 +210,7 @@ async function handler(req, res) {
   if (['/','/admin','/account','/admin/users','/login','/register','/reset','/setup','/welcome'].includes(path) || path.startsWith('/portal/')) {
     return portal(req,res,path,store,readJson,json);
   }
-  const adminRoute=['/dashboard','/api/proxies/import','/api/proxies/shuffle','/api/admin/backup','/health/stats','/admin/allocation','/admin/monitoring'].includes(path);
+  const adminRoute=['/dashboard','/api/proxies/import','/api/proxies/shuffle','/api/admin/backup','/health/stats','/admin/allocation','/admin/monitoring','/admin/monitoring/email'].includes(path);
   let key,user;
   if(adminRoute) {
     if(!store.session(sessionToken(req))?.admin) {
@@ -220,8 +220,9 @@ async function handler(req, res) {
     if(req.method==='POST' && !browserWrite(req)) return json(res,403,{error:{message:'Same-site JSON required.'}});
     if(path==='/admin/monitoring' && req.method==='GET') {
       const active=proxies.filter(p=>available(p)).length, status=store.operationalStatus();
-      return json(res,200,{activeProxies:active,loadedProxies:proxies.length,...status});
+      return json(res,200,{activeProxies:active,loadedProxies:proxies.length,emailEnabled:store.monitoringEmailEnabled(),emailConfigured:Boolean(process.env.ALERT_EMAIL&&process.env.RESEND_API_KEY&&process.env.USAGE_EMAIL_FROM),...status});
     }
+    if(path==='/admin/monitoring/email' && req.method==='POST') { let body;try{body=await readJson(req,2048)}catch{return json(res,400,{error:{message:'Invalid request.'}})}if(typeof body?.enabled!=='boolean')return json(res,400,{error:{message:'A boolean enabled value is required.'}});store.setMonitoringEmailEnabled(body.enabled);return json(res,200,{enabled:store.monitoringEmailEnabled()}); }
     if(path==='/admin/allocation' && req.method==='GET') {
       const active=proxies.filter(p=>available(p));
       const capacity=active.length*MAX_PER_HOUR;
@@ -276,7 +277,7 @@ if (process.env.KILO_BUSTER_TEST !== '1') {
   const refreshTimer=setInterval(refreshProxies,45*60*1000);refreshTimer.unref();
   let lastAlert=0, alertBusy=false;
   const alertTimer=setInterval(async()=>{
-    if(alertBusy||!process.env.ALERT_EMAIL||!process.env.RESEND_API_KEY||!process.env.USAGE_EMAIL_FROM||Date.now()-lastAlert<60*60*1000)return;
+    if(alertBusy||!store.monitoringEmailEnabled()||!process.env.ALERT_EMAIL||!process.env.RESEND_API_KEY||!process.env.USAGE_EMAIL_FROM||Date.now()-lastAlert<60*60*1000)return;
     const status=store.operationalStatus(), active=proxies.filter(p=>available(p)).length, problems=[];
     if(!active)problems.push('No proxy endpoints are currently available.');
     if(status.welcomeFailed)problems.push(status.welcomeFailed+' welcome email(s) awaiting retry.');
