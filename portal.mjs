@@ -87,7 +87,7 @@ export async function portal(req,res,path,store,readJson,json) {
   if(req.method==='GET' && path==='/portal/me') {
     if(!session?.uid)return fail(401,'Sign in required.');
     const {subscription,invoices}=store.billing(session.uid,live);
-    return send({...store.user(session.uid),temporary:session.temporary,paidUntil:subscription?.paid_until||null,invoices});
+    return send({...store.user(session.uid),recoveryEmail:store.recoveryEmail(session.uid),temporary:session.temporary,paidUntil:subscription?.paid_until||null,invoices});
   }
   if(req.method==='GET' && path==='/portal/users') return session?.admin ? send(store.list()) : fail(403,'Admin sign-in required.');
   if(req.method==='GET' && path==='/portal/payments') return session?.admin ? send(store.payments()) : fail(403,'Admin sign-in required.');
@@ -98,6 +98,20 @@ export async function portal(req,res,path,store,readJson,json) {
   let data;
   try {data=await readJson(req,2048);} catch {return fail(400,'Invalid or oversized JSON.');}
   if (!data || typeof data!=='object') return fail(400,'Invalid request.');
+  if(path==='/portal/recovery-email'){
+    if(!session?.uid)return fail(401,'Sign in required.');
+    if(limited('recovery-email:'+session.uid,5))return fail(429,'Please wait before trying again.');
+    if(typeof data.email!=='string'||data.email.length>254||!/^\S+@\S+\.\S+$/.test(data.email)||typeof data.password!=='string'||data.password.length>256)return fail(400,'Enter a valid email address and your current password.');
+    if(!process.env.RESEND_API_KEY||!process.env.USAGE_EMAIL_FROM)return fail(503,'Email delivery is unavailable. Contact support.');
+    const email=data.email.trim().toLowerCase(),verify=await store.requestRecoveryEmail(session.uid,email,data.password);
+    if(!verify)return fail(401,'Current password is incorrect.');
+    try{const response=await fetch('https://api.resend.com/emails',{method:'POST',signal:AbortSignal.timeout(10000),headers:{'Content-Type':'application/json',Authorization:'Bearer '+process.env.RESEND_API_KEY},body:JSON.stringify({from:process.env.USAGE_EMAIL_FROM,to:[email],subject:'Verify your Kilo Buster recovery email',text:'While signed in, open this link within 30 minutes to confirm your recovery email: '+siteOrigin()+'/account?verify_email='+encodeURIComponent(verify)+'\nIf you did not request this, ignore this message.'})});if(!response.ok)throw Error('Email delivery failed');return send({});}catch{return fail(502,'Could not send verification email. Try again.');}
+  }
+  if(path==='/portal/confirm-recovery-email'){
+    if(!session?.uid)return fail(401,'Sign in to confirm your recovery email.');
+    if(typeof data.token!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(data.token))return fail(400,'Invalid verification link.');
+    return store.confirmRecoveryEmail(session.uid,data.token)?send({}):fail(400,'Verification link is invalid or expired.');
+  }
   if(path==='/portal/rotate-key'){
     if(!session?.uid)return fail(401,'Sign in required.');
     if(!Number.isSafeInteger(data.id)||data.id<1)return fail(400,'Invalid key.');
