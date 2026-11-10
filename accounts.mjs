@@ -46,6 +46,7 @@ export function accounts(db, defaultLimit) {
     db.exec('CREATE TABLE IF NOT EXISTS password_resets (hash TEXT PRIMARY KEY, uid INTEGER NOT NULL, expires INTEGER NOT NULL)');
     if (!query("SELECT 1 FROM pragma_table_info('api_keys') WHERE name='expires'").get()) db.exec('ALTER TABLE api_keys ADD COLUMN expires INTEGER');
     db.exec('CREATE TABLE IF NOT EXISTS trial_claims (claim_hash TEXT PRIMARY KEY, key_id INTEGER NOT NULL, expires INTEGER NOT NULL)');
+    db.exec('CREATE TABLE IF NOT EXISTS admin_audit (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, detail TEXT NOT NULL)');
     db.exec('CREATE TABLE IF NOT EXISTS account_trials (uid INTEGER PRIMARY KEY, created INTEGER NOT NULL)');
     if (!query("SELECT 1 FROM pragma_table_info('requests') WHERE name='key_id'").get()) {
       db.exec(`ALTER TABLE requests ADD COLUMN key_id INTEGER;
@@ -87,6 +88,13 @@ export function accounts(db, defaultLimit) {
       .run(digest(key),key.slice(-6),quota,protect(key),id).changes ? key : null;
   }
   return {
+    rotateKey(uid,id){
+      const key='kb_'+secret();
+      const changed=query('UPDATE api_keys SET hash=?,suffix=?,secret=? WHERE id=? AND uid=? AND (expires IS NULL OR expires>?) AND EXISTS(SELECT 1 FROM users WHERE id=? AND disabled=0)').run(digest(key),key.slice(-6),protect(key),id,uid,Date.now(),uid).changes;
+      return changed?key:null;
+    },
+    audit(action,target,detail=''){query('INSERT INTO admin_audit(at,action,target,detail) VALUES(?,?,?,?)').run(Date.now(),action,String(target),String(detail));},
+    auditLog(){return query('SELECT at,action,target,detail FROM admin_audit ORDER BY id DESC LIMIT 200').all()},
     createAccountTrial(uid){
       const now=Date.now();db.exec('BEGIN IMMEDIATE');
       try {

@@ -29,6 +29,7 @@ test('hosted users, limits, proxy imports, admin allocation and revocation', asy
     assert.equal((await call('/portal/register',identity)).status,409);
     assert.equal((await call('/portal/login',identity)).status,200);
     assert.equal((await call('/portal/users',undefined,member)).status,403);
+    assert.equal((await call('/portal/audit',undefined,member)).status,403);
     assert.equal((await call('/api/proxies/import',{},member)).status,403);
     assert.equal((await call('/api/proxies/import',{}, {...admin,origin:'https://elsewhere.invalid'})).status,403);
     const me=async()=> (await call('/portal/me',undefined,member)).json();
@@ -41,6 +42,9 @@ test('hosted users, limits, proxy imports, admin allocation and revocation', asy
     assert.equal((await call('/portal/users/create-with-key',newUser,member)).status,403);
     const created=await (await call('/portal/users/create-with-key',newUser,admin)).json();
     assert.match(created.key,/^kb_/);
+    const audit=await (await call('/portal/audit',undefined,admin)).json();
+    assert.ok(audit.some(entry=>entry.action==='create account and key'&&entry.target==='client'&&entry.detail.includes('24')));
+    assert.ok(!JSON.stringify(audit).includes(created.key));
     assert.equal((await call('/portal/users/create-with-key',{...newUser,password:'different-pwd'},admin)).status,409);
     const clientLogin=await call('/portal/login',newUser);
     const clientHeaders={cookie:clientLogin.headers.get('set-cookie').split(';')[0]};

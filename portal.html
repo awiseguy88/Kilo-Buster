@@ -152,7 +152,7 @@ async function account(){
   const p=el('section',undefined,'panel account-panel');content.append(p);p.append(el('h2','API access'),el('code',location.origin+'/v1'),
     el('p',u.keys.length?'Assigned keys':'Try the service or choose a monthly plan below.'));
   if(!u.keys.length)button(p,'Start free trial',async()=>{await api('/portal/account-trial',{});await account();message('Your three-day trial is ready.')});
-  for(const k of u.keys){const line=el('div',undefined,'key-line');line.append(el('strong','API key · '+k.suffix),el('p',k.remaining+' of '+k.quota+' requests left this hour'));const copy=el('button','Copy API key','secondary');copy.type='button';copy.onclick=async()=>{try{await navigator.clipboard.writeText(k.key);message('API key copied to clipboard.')}catch{message('Clipboard access was blocked.')}};line.append(copy);p.append(line)}
+  for(const k of u.keys){const line=el('div',undefined,'key-line');line.append(el('strong','API key · '+k.suffix),el('p',k.remaining+' of '+k.quota+' requests left this hour'));const actions=el('div',undefined,'actions');const copy=el('button','Copy API key','secondary');copy.type='button';copy.onclick=async()=>{try{await navigator.clipboard.writeText(k.key);message('API key copied to clipboard.')}catch{message('Clipboard access was blocked.')}};actions.append(copy);button(actions,'Rotate key',async()=>{if(!confirm('Rotate this key? Existing clients using it will stop working immediately.'))return;const result=await api('/portal/rotate-key',{id:k.id});await account();showKey(result.key,'Your key has been rotated. Update your clients with the new key.');message('Key rotated.')},true);line.append(actions);p.append(line)}
   const plans=el('section',undefined,'panel account-panel subscription-panel');plans.append(el('h2','Your subscription'));content.append(plans);
   if(u.paidUntil){
     plans.append(el('p','Paid through '+new Date(u.paidUntil).toLocaleDateString()+'.'));
@@ -178,7 +178,7 @@ async function account(){
   metrics(content,[['Lifetime input tokens',u.input],['Lifetime output tokens',u.output],['Total tokens',u.input+u.output]]);
 }
 async function admins(){
-  const [users,v,payments,sales]=await Promise.all([api('/portal/users'),api('/admin/allocation'),api('/portal/payments'),api('/portal/sales')]); content.replaceChildren();
+  const [users,v,payments,sales,audit]=await Promise.all([api('/portal/users'),api('/admin/allocation'),api('/portal/payments'),api('/portal/sales'),api('/portal/audit')]); content.replaceChildren();
   metrics(content,[['Available proxies',v.active],['Hourly capacity',v.capacity],['Assigned per hour',v.assigned],[v.balance<0?'Overassigned per hour':'Unassigned per hour',Math.abs(v.balance)]]);
   content.append(el('p',v.active+' available proxies × '+v.perProxy+' attempts/hour. '+v.remainingNow+' attempts remain right now. Assignments may exceed capacity.'));
   const payPanel=el('section',undefined,'panel');payPanel.append(el('h2','Legacy payment approvals'));content.append(payPanel);if(!payments.length)payPanel.append(el('p','No legacy payments. New subscriptions activate automatically and appear in invoice sales.'));for(const p of payments){const row=el('div',undefined,'row');row.append(el('strong',(p.username||'Unknown user')+' · '+p.quota.toLocaleString()+'/hr'),el('p',p.status+' · '+new Date(p.created).toLocaleString()));if(p.status==='pending')button(row,'Approve payment',async()=>{await api('/portal/payments/'+p.id+'/approve',{});await admins();message('Payment approved and quota activated.')});payPanel.append(row)}
@@ -195,9 +195,11 @@ async function admins(){
     }catch(e){message(e.message)}finally{submit.disabled=false}
   };
   const panel=el('section',undefined,'panel admin-key-panel');panel.append(el('h2','API key management'),el('p','Create, rotate, limit, or revoke customer keys. Full key values are shown only when created.'));content.append(panel);
+  const search=el('input');search.type='search';search.placeholder='Search customers';search.setAttribute('aria-label','Search customers');panel.append(search);search.oninput=()=>panel.querySelectorAll('.admin-user-row').forEach(row=>row.hidden=!row.dataset.username.includes(search.value.trim().toLowerCase()));
   if(!users.length)panel.append(el('p','Registered users will appear here.'));
   for(const u of users){
     const row=el('div',undefined,'row admin-user-row'),actions=el('div',undefined,'actions');panel.append(row);
+    row.dataset.username=u.username.toLowerCase();
     row.append(el('strong',u.username+(u.trial_until?' · Trial':'')+(u.disabled?' · Revoked':'')),el('p',u.used+' used this hour · '+u.remaining+' left · '+u.total+' lifetime requests'),actions);
     const base='/portal/users/'+u.id+'/';
     if(!u.disabled){
@@ -220,6 +222,7 @@ async function admins(){
       await api(base+(u.disabled?'enable':'revoke'),{});$('issued').hidden=true;$('secret').value='';await admins();
     },true);
   }
+  const history=el('section',undefined,'panel');history.append(el('h2','Admin activity'),el('p','Recent changes by the shared administrator account.'));if(!audit.length)history.append(el('p','No recorded changes yet.'));for(const entry of audit){const row=el('div',undefined,'row');row.append(el('strong',entry.action+' · '+entry.target),el('p',new Date(entry.at).toLocaleString()+(entry.detail?' · '+entry.detail:'')));history.append(row)}content.append(history);
 }
 function limitInput(parent,label,value){const input=field(parent,label,'number');input.min=0;input.max=1000000;input.value=value;return input}
 if(path==='/reset')resetPage();
