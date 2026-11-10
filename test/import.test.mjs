@@ -31,6 +31,9 @@ test('hosted users, limits, proxy imports, admin allocation and revocation', asy
     assert.equal((await call('/portal/login',identity)).status,200);
     assert.equal((await call('/portal/users',undefined,member)).status,403);
     assert.equal((await call('/portal/audit',undefined,member)).status,403);
+    assert.equal((await call('/admin/monitoring',undefined,member)).status,403);
+    const monitoring=await (await call('/admin/monitoring',undefined,admin)).json();
+    assert.equal(monitoring.activeProxies,0);assert.equal(monitoring.welcomeFailed,0);assert.equal(monitoring.webhookFailures,0);
     assert.equal((await call('/api/proxies/import',{},member)).status,403);
     assert.equal((await call('/api/proxies/import',{}, {...admin,origin:'https://elsewhere.invalid'})).status,403);
     const me=async()=> (await call('/portal/me',undefined,member)).json();

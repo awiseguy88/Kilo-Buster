@@ -48,6 +48,7 @@ export function accounts(db, defaultLimit) {
     if (!query("SELECT 1 FROM pragma_table_info('api_keys') WHERE name='expires'").get()) db.exec('ALTER TABLE api_keys ADD COLUMN expires INTEGER');
     db.exec('CREATE TABLE IF NOT EXISTS trial_claims (claim_hash TEXT PRIMARY KEY, key_id INTEGER NOT NULL, expires INTEGER NOT NULL)');
     db.exec('CREATE TABLE IF NOT EXISTS admin_audit (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, detail TEXT NOT NULL)');
+    db.exec('CREATE TABLE IF NOT EXISTS operational_events (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, kind TEXT NOT NULL)');
     db.exec('CREATE TABLE IF NOT EXISTS account_trials (uid INTEGER PRIMARY KEY, created INTEGER NOT NULL)');
     if (!query("SELECT 1 FROM pragma_table_info('requests') WHERE name='key_id'").get()) {
       db.exec(`ALTER TABLE requests ADD COLUMN key_id INTEGER;
@@ -89,6 +90,8 @@ export function accounts(db, defaultLimit) {
       .run(digest(key),key.slice(-6),quota,protect(key),id).changes ? key : null;
   }
   return {
+    operationalEvent(kind){query('INSERT INTO operational_events(at,kind) VALUES(?,?)').run(Date.now(),kind);query('DELETE FROM operational_events WHERE at<?').run(Date.now()-7*24*hour)},
+    operationalStatus(){return {welcomePending:query('SELECT count(*) AS n FROM welcome_mail WHERE sent IS NULL').get().n,welcomeFailed:query('SELECT count(*) AS n FROM welcome_mail WHERE sent IS NULL AND attempts>0').get().n,webhookFailures:query("SELECT count(*) AS n FROM operational_events WHERE kind='webhook_processing_failed' AND at>?").get(Date.now()-24*hour).n}},
     recoveryEmail(uid){return query('SELECT email FROM users WHERE id=? AND disabled=0').get(uid)?.email||null},
     async requestRecoveryEmail(uid,email,password){
       const u=query('SELECT username FROM users WHERE id=? AND disabled=0').get(uid);

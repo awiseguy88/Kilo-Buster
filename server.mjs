@@ -198,7 +198,7 @@ async function handler(req, res) {
   if(path==='/stripe/webhook' && req.method==='POST') {
     const raw=await readRaw(req); if(!stripeSignatureValid(raw,req.headers['stripe-signature'],process.env.STRIPE_WEBHOOK_SECRET)) return json(res,400,{error:{message:'Invalid Stripe signature.'}});
     let event;try{event=JSON.parse(raw)}catch{return json(res,400,{error:{message:'Invalid webhook payload.'}})}
-    applyStripeEvent(event,store);
+    try{applyStripeEvent(event,store)}catch(error){store.operationalEvent('webhook_processing_failed');throw error}
     void deliverWelcome();
     return json(res,200,{received:true});
   }
@@ -210,7 +210,7 @@ async function handler(req, res) {
   if (['/','/admin','/account','/admin/users','/login','/register','/reset','/setup','/welcome'].includes(path) || path.startsWith('/portal/')) {
     return portal(req,res,path,store,readJson,json);
   }
-  const adminRoute=['/dashboard','/api/proxies/import','/api/proxies/shuffle','/api/admin/backup','/health/stats','/admin/allocation'].includes(path);
+  const adminRoute=['/dashboard','/api/proxies/import','/api/proxies/shuffle','/api/admin/backup','/health/stats','/admin/allocation','/admin/monitoring'].includes(path);
   let key,user;
   if(adminRoute) {
     if(!store.session(sessionToken(req))?.admin) {
@@ -218,6 +218,10 @@ async function handler(req, res) {
       return json(res,403,{error:{message:'Admin sign-in required.'}});
     }
     if(req.method==='POST' && !browserWrite(req)) return json(res,403,{error:{message:'Same-site JSON required.'}});
+    if(path==='/admin/monitoring' && req.method==='GET') {
+      const active=proxies.filter(p=>available(p)).length, status=store.operationalStatus();
+      return json(res,200,{activeProxies:active,loadedProxies:proxies.length,...status});
+    }
     if(path==='/admin/allocation' && req.method==='GET') {
       const active=proxies.filter(p=>available(p));
       const capacity=active.length*MAX_PER_HOUR;
@@ -270,6 +274,16 @@ if (process.env.KILO_BUSTER_TEST !== '1') {
   const refreshProxies=()=>importProxies().catch(error=>console.error('[proxy] automatic import failed:',error.message));
   void refreshProxies();
   const refreshTimer=setInterval(refreshProxies,45*60*1000);refreshTimer.unref();
+  let lastAlert=0, alertBusy=false;
+  const alertTimer=setInterval(async()=>{
+    if(alertBusy||!process.env.ALERT_EMAIL||!process.env.RESEND_API_KEY||!process.env.USAGE_EMAIL_FROM||Date.now()-lastAlert<60*60*1000)return;
+    const status=store.operationalStatus(), active=proxies.filter(p=>available(p)).length, problems=[];
+    if(!active)problems.push('No proxy endpoints are currently available.');
+    if(status.welcomeFailed)problems.push(status.welcomeFailed+' welcome email(s) awaiting retry.');
+    if(status.webhookFailures)problems.push(status.webhookFailures+' Stripe webhook processing failure(s) in the last 24 hours.');
+    if(!problems.length)return;
+    alertBusy=true;try{const response=await fetch('https://api.resend.com/emails',{method:'POST',signal:AbortSignal.timeout(10000),headers:{Authorization:'Bearer '+process.env.RESEND_API_KEY,'Content-Type':'application/json'},body:JSON.stringify({from:process.env.USAGE_EMAIL_FROM,to:[process.env.ALERT_EMAIL],subject:'Kilo Buster service needs attention',text:problems.join('\n')+'\n\nCheck the admin dashboard and Railway logs.'})});if(response.ok)lastAlert=Date.now();else console.error('[monitor] alert delivery failed',response.status)}catch{console.error('[monitor] alert delivery failed')}finally{alertBusy=false}
+  },5*60*1000);alertTimer.unref();
   http.createServer((req,res)=>handler(req,res).catch(error=> {
   console.error('[http] request failed:',error?.stack||error);
   if(res.headersSent) return res.destroy();
