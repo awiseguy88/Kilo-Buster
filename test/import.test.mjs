@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
@@ -42,6 +43,11 @@ test('hosted users, limits, proxy imports, admin allocation and revocation', asy
     assert.equal((await call('/portal/users/create-with-key',newUser,member)).status,403);
     const created=await (await call('/portal/users/create-with-key',newUser,admin)).json();
     assert.match(created.key,/^kb_/);
+    assert.equal((await call('/api/admin/backup',{},member)).status,403);
+    const snapshot=await call('/api/admin/backup',{},admin);
+    assert.equal(snapshot.status,200);
+    const restoredPath=join(dir,'restore-test.sqlite');await writeFile(restoredPath,Buffer.from(await snapshot.arrayBuffer()));
+    const restored=new DatabaseSync(restoredPath);assert.equal(restored.prepare('SELECT username FROM users WHERE username=?').get('client').username,'client');restored.close();
     const audit=await (await call('/portal/audit',undefined,admin)).json();
     assert.ok(audit.some(entry=>entry.action==='create account and key'&&entry.target==='client'&&entry.detail.includes('24')));
     assert.ok(!JSON.stringify(audit).includes(created.key));
