@@ -2,8 +2,9 @@ import http from 'node:http';
 import { publicPage } from './public-site.mjs';
 import { applyStripeEvent } from './billing.mjs';
 import { welcomeMailer } from './welcome.mjs';
-import { DatabaseSync } from 'node:sqlite';
-import { readFile, writeFile, rename } from 'node:fs/promises';
+import { DatabaseSync, backup } from 'node:sqlite';
+import { readFile, writeFile, rename, mkdtemp, unlink, rmdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHmac, timingSafeEqual } from 'node:crypto';
@@ -209,7 +210,7 @@ async function handler(req, res) {
   if (['/','/admin','/account','/admin/users','/login','/register','/reset','/setup','/welcome'].includes(path) || path.startsWith('/portal/')) {
     return portal(req,res,path,store,readJson,json);
   }
-  const adminRoute=['/dashboard','/api/proxies/import','/api/proxies/shuffle','/health/stats','/admin/allocation'].includes(path);
+  const adminRoute=['/dashboard','/api/proxies/import','/api/proxies/shuffle','/api/admin/backup','/health/stats','/admin/allocation'].includes(path);
   let key,user;
   if(adminRoute) {
     if(!store.session(sessionToken(req))?.admin) {
@@ -232,6 +233,11 @@ async function handler(req, res) {
     if(!user) return json(res,401,{error:{message:'Invalid or revoked API key.',type:'authentication_error'}});
   }
   if (path === '/dashboard' && req.method === 'GET') { res.writeHead(200, {'content-type':'text/html; charset=utf-8'}); return res.end(await readFile(join(ROOT, 'dashboard.html'), 'utf8')); }
+  if (path === '/api/admin/backup' && req.method === 'POST') {
+    const dir=await mkdtemp(join(tmpdir(),'kilo-backup-')),file=join(dir,'backup.sqlite');
+    try { await backup(tokenDb,file); const bytes=await readFile(file); store.audit('download database backup','administrator'); res.writeHead(200,{'content-type':'application/vnd.sqlite3','content-disposition':'attachment; filename="kilo-buster-backup.sqlite"','cache-control':'no-store'}); return res.end(bytes); }
+    finally { await unlink(file).catch(()=>{}); await rmdir(dir).catch(()=>{}); }
+  }
   if (path === '/api/proxies/import' && req.method === 'POST') { try { return json(res, 200, await importProxies()); } catch (error) { return json(res, 502, { error: { message: error.message } }); } }
   if (path === '/api/proxies/shuffle' && req.method === 'POST') { for(const p of proxies)p.shuffleRank=Math.random()*999; return json(res,200,{total:proxies.length}); }
   if (path === '/health/stats' && req.method === 'GET') { const rank=new Map(proxies.map(p=>[p.id,p.shuffleRank??0])); const stats = proxies.map(proxyStats).sort((a,b) => Math.floor((a.latencyMs??Infinity)/1000)-Math.floor((b.latencyMs??Infinity)/1000)||(rank.get(a.id)-rank.get(b.id))); return json(res, 200, { tokens: getUsage.get(), total: stats.length, available: stats.filter(p => p.backoffSeconds === 0 && p.remaining > 0).length, quota: MAX_PER_HOUR, proxies: stats }); }

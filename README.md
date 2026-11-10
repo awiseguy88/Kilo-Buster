@@ -27,3 +27,9 @@ Each accepted chat request counts once against its key’s rolling 60-minute lim
 The admin allocation panel compares the sum of active key limits with the number of currently available proxies multiplied by the per-proxy hourly limit. It also shows remaining proxy attempts after actual usage. Overassignment is advisory.
 
 Set `SUPPORT_EMAIL` to the address that should receive customer usage requests and problem reports. If omitted, it defaults to `aaronwise@aaronwiseai.com`.
+
+### Manual database backup
+
+In **Admin → User access**, select **Download database backup**. The snapshot includes account records, sessions, encrypted keys, subscriptions and usage; store it privately. It does not contain the proxy list, Railway environment variables or your encryption secret. Keep a separate secure copy of `KEY_ENCRYPTION_SECRET` (or the existing `ADMIN_PASSWORD` if no separate secret was configured): encrypted keys cannot be recovered without the original secret.
+
+To test a restore, use a separate staging service and volume. Stop that service before placing the downloaded snapshot at the configured database path (`PROXY_STATE_FILE` plus `.tokens.sqlite`, or `/data/proxy-health-state.json.tokens.sqlite` with the default volume configuration). Start staging with the original encryption secret and verify accounts, keys and usage. Never overwrite the production database while the app is running; retain a separate current backup before any production restore.
