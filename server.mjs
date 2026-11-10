@@ -275,15 +275,15 @@ if (process.env.KILO_BUSTER_TEST !== '1') {
   const refreshProxies=()=>importProxies().catch(error=>console.error('[proxy] automatic import failed:',error.message));
   void refreshProxies();
   const refreshTimer=setInterval(refreshProxies,45*60*1000);refreshTimer.unref();
-  let lastAlert=0, alertBusy=false;
+  let alertBusy=false;
   const alertTimer=setInterval(async()=>{
-    if(alertBusy||!store.monitoringEmailEnabled()||!process.env.ALERT_EMAIL||!process.env.RESEND_API_KEY||!process.env.USAGE_EMAIL_FROM||Date.now()-lastAlert<60*60*1000)return;
+    if(alertBusy||!store.monitoringEmailEnabled()||!process.env.ALERT_EMAIL||!process.env.RESEND_API_KEY||!process.env.USAGE_EMAIL_FROM)return;
     const status=store.operationalStatus(), active=proxies.filter(p=>available(p)).length, problems=[];
-    if(!active)problems.push('No proxy endpoints are currently available.');
-    if(status.welcomeFailed)problems.push(status.welcomeFailed+' welcome email(s) awaiting retry.');
-    if(status.webhookFailures)problems.push(status.webhookFailures+' Stripe webhook processing failure(s) in the last 24 hours.');
+    if(!active&&store.alertDue('no_proxies'))problems.push(['no_proxies','No proxy endpoints are currently available.']);
+    if(status.welcomeFailed&&store.alertDue('welcome_failed'))problems.push(['welcome_failed',status.welcomeFailed+' welcome email(s) awaiting retry.']);
+    if(status.webhookFailures&&store.alertDue('webhook_failed'))problems.push(['webhook_failed',status.webhookFailures+' Stripe webhook processing failure(s) in the last 24 hours.']);
     if(!problems.length)return;
-    alertBusy=true;try{const response=await fetch('https://api.resend.com/emails',{method:'POST',signal:AbortSignal.timeout(10000),headers:{Authorization:'Bearer '+process.env.RESEND_API_KEY,'Content-Type':'application/json'},body:JSON.stringify({from:process.env.USAGE_EMAIL_FROM,to:[process.env.ALERT_EMAIL],subject:'Kilo Buster service needs attention',text:problems.join('\n')+'\n\nCheck the admin dashboard and Railway logs.'})});if(response.ok)lastAlert=Date.now();else console.error('[monitor] alert delivery failed',response.status)}catch{console.error('[monitor] alert delivery failed')}finally{alertBusy=false}
+    alertBusy=true;try{const response=await fetch('https://api.resend.com/emails',{method:'POST',signal:AbortSignal.timeout(10000),headers:{Authorization:'Bearer '+process.env.RESEND_API_KEY,'Content-Type':'application/json'},body:JSON.stringify({from:process.env.USAGE_EMAIL_FROM,to:[process.env.ALERT_EMAIL],subject:'Kilo Buster service needs attention',text:problems.map(p=>p[1]).join('\n')+'\n\nCheck the admin dashboard and Railway logs.'})});if(response.ok)store.alertSent(problems.map(p=>p[0]));else console.error('[monitor] alert delivery failed',response.status)}catch{console.error('[monitor] alert delivery failed')}finally{alertBusy=false}
   },5*60*1000);alertTimer.unref();
   http.createServer((req,res)=>handler(req,res).catch(error=> {
   console.error('[http] request failed:',error?.stack||error);
