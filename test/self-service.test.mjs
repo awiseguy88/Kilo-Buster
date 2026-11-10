@@ -32,6 +32,25 @@ test('password reset requires matching email and username, expires and is single
   }finally{db.close()}
 });
 
+test('recovery email changes require password and a single-use confirmation for the correct account',async()=>{
+  const db=new DatabaseSync(':memory:'),s=accounts(db,30);
+  try{
+    await s.register('member-one','original-password','old@example.com');
+    await s.register('member-two','second-password','other@example.com');
+    assert.equal(await s.requestRecoveryEmail(1,'new@example.com','incorrect'),null);
+    const token=await s.requestRecoveryEmail(1,'new@example.com','original-password');
+    assert.equal(s.recoveryEmail(1),'old@example.com');
+    assert.equal(s.confirmRecoveryEmail(2,token),false);
+    assert.equal(s.confirmRecoveryEmail(1,token),true);
+    assert.equal(s.recoveryEmail(1),'new@example.com');
+    assert.equal(s.confirmRecoveryEmail(1,token),false);
+    const expired=await s.requestRecoveryEmail(1,'later@example.com','original-password');
+    db.prepare('UPDATE email_verifications SET expires=0').run();
+    assert.equal(s.confirmRecoveryEmail(1,expired),false);
+    assert.equal(s.recoveryEmail(1),'new@example.com');
+  }finally{db.close()}
+});
+
 test('an account trial is issued once and expires after three days',async()=>{
   const db=new DatabaseSync(':memory:'),s=accounts(db,30);
   try{

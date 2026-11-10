@@ -44,6 +44,7 @@ export function accounts(db, defaultLimit) {
     if (!query("SELECT 1 FROM pragma_table_info('users') WHERE name='temporary'").get()) db.exec('ALTER TABLE users ADD COLUMN temporary INTEGER NOT NULL DEFAULT 0');
     if (!query("SELECT 1 FROM pragma_table_info('users') WHERE name='email'").get()) db.exec('ALTER TABLE users ADD COLUMN email TEXT COLLATE NOCASE');
     db.exec('CREATE TABLE IF NOT EXISTS password_resets (hash TEXT PRIMARY KEY, uid INTEGER NOT NULL, expires INTEGER NOT NULL)');
+    db.exec('CREATE TABLE IF NOT EXISTS email_verifications (hash TEXT PRIMARY KEY, uid INTEGER NOT NULL, email TEXT NOT NULL, expires INTEGER NOT NULL)');
     if (!query("SELECT 1 FROM pragma_table_info('api_keys') WHERE name='expires'").get()) db.exec('ALTER TABLE api_keys ADD COLUMN expires INTEGER');
     db.exec('CREATE TABLE IF NOT EXISTS trial_claims (claim_hash TEXT PRIMARY KEY, key_id INTEGER NOT NULL, expires INTEGER NOT NULL)');
     db.exec('CREATE TABLE IF NOT EXISTS admin_audit (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, detail TEXT NOT NULL)');
@@ -88,6 +89,18 @@ export function accounts(db, defaultLimit) {
       .run(digest(key),key.slice(-6),quota,protect(key),id).changes ? key : null;
   }
   return {
+    recoveryEmail(uid){return query('SELECT email FROM users WHERE id=? AND disabled=0').get(uid)?.email||null},
+    async requestRecoveryEmail(uid,email,password){
+      const u=query('SELECT username FROM users WHERE id=? AND disabled=0').get(uid);
+      if(!u||!await this.login(u.username,password))return null;
+      const token=secret();query('DELETE FROM email_verifications WHERE uid=? OR expires<?').run(uid,Date.now());
+      query('INSERT INTO email_verifications VALUES(?,?,?,?)').run(digest(token),uid,email,Date.now()+30*60*1000);return token;
+    },
+    confirmRecoveryEmail(uid,token){
+      db.exec('BEGIN IMMEDIATE');try{const row=query('SELECT email FROM email_verifications WHERE hash=? AND uid=? AND expires>?').get(digest(token),uid,Date.now());if(!row){db.exec('ROLLBACK');return false;}
+        query('UPDATE users SET email=? WHERE id=? AND disabled=0').run(row.email,uid);query('DELETE FROM email_verifications WHERE uid=?').run(uid);query('DELETE FROM password_resets WHERE uid=?').run(uid);db.exec('COMMIT');return true;
+      }catch(e){db.exec('ROLLBACK');throw e;}
+    },
     rotateKey(uid,id){
       const key='kb_'+secret();
       const changed=query('UPDATE api_keys SET hash=?,suffix=?,secret=? WHERE id=? AND uid=? AND (expires IS NULL OR expires>?) AND EXISTS(SELECT 1 FROM users WHERE id=? AND disabled=0)').run(digest(key),key.slice(-6),protect(key),id,uid,Date.now(),uid).changes;

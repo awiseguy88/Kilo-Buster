@@ -172,6 +172,9 @@ async function account(){
   button(supportActions,'Report a problem',()=>{location.href='mailto:aaronwise@aaronwiseai.com?subject='+encodeURIComponent('Kilo Buster Cloud problem report')+'&body='+encodeURIComponent('Username: '+u.username+'\n\nWhat happened?\n\nSteps to reproduce:\n')},true);
   support.append(supportActions);plans.append(support);
   const security=el('section',undefined,'panel account-panel');security.append(el('h2','Account security'),el('p','Update your password. Other signed-in sessions will be signed out.'));content.append(security);
+  security.append(el('h3','Recovery email'),el('p',u.recoveryEmail?'Current recovery email: '+u.recoveryEmail:'No recovery email is set. Add one to use password reset.'));
+  const emailForm=el('form',undefined,'recovery-email-form'),recovery=field(emailForm,'New recovery email','email','email'),recoveryPassword=field(emailForm,'Current password','password','current-password'),sendVerification=el('button','Send verification link');emailForm.append(sendVerification);security.append(emailForm);
+  emailForm.onsubmit=async e=>{e.preventDefault();sendVerification.disabled=true;try{await api('/portal/recovery-email',{email:recovery.value,password:recoveryPassword.value});emailForm.reset();message('Verification email sent. Open the link while signed in.')}catch(error){message(error.message)}finally{sendVerification.disabled=false}};
   const form=el('form',undefined,'password-change'), current=field(form,'Current password','password','current-password'), password=field(form,'New password','password','new-password'), confirmPassword=field(form,'Confirm new password','password','new-password');password.minLength=10;password.maxLength=256;confirmPassword.minLength=10;confirmPassword.maxLength=256;
   const save=el('button','Change password');form.append(save);security.append(form);
   form.onsubmit=async e=>{e.preventDefault();if(password.value!==confirmPassword.value){message('New passwords do not match.');return}save.disabled=true;try{await api('/portal/change-password',{current:current.value,password:password.value});form.reset();message('Password updated. Other sessions have been signed out.')}catch(error){message(error.message)}finally{save.disabled=false}};
@@ -228,7 +231,7 @@ function limitInput(parent,label,value){const input=field(parent,label,'number')
 if(path==='/reset')resetPage();
 else if(path==='/setup')guide();
 else if(path==='/welcome')welcome();
-else if(path==='/account'){account().catch(e=>message(e.message));setInterval(()=>{if(!document.hidden&&!$('upgrade').open&&!document.activeElement?.closest('.password-change'))account().catch(e=>message(e.message))},15000)}
+else if(path==='/account'){const verify=new URLSearchParams(location.search).get('verify_email');if(verify){history.replaceState(null,'','/account');api('/portal/confirm-recovery-email',{token:verify}).then(()=>{message('Recovery email verified.');return account()}).catch(e=>{message(e.message);account().catch(()=>{})})}else account().catch(e=>message(e.message));setInterval(()=>{if(!document.hidden&&!$('upgrade').open&&!document.activeElement?.closest('.password-change, .recovery-email-form'))account().catch(e=>message(e.message))},15000)}
 else if(path==='/admin/users'){$('title').textContent='Accounts and allocation';link(nav,'Home','/');link(nav,'Proxy dashboard','/dashboard');link(nav,'Setup guide','/setup');signOut();admins().catch(e=>message(e.message));button(nav,'Refresh',admins,true)}
 else auth();
 </script></body></html>
